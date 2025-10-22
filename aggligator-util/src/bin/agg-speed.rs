@@ -1,4 +1,4 @@
-//! Aggligator speed test.
+//! Aggligator 速度测试工具。
 
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -66,7 +66,7 @@ mod usb {
     pub const INTERFACE_CLASS: u8 = 255;
     pub const INTERFACE_SUB_CLASS: u8 = 230;
     pub const INTERFACE_PROTOCOL: u8 = 231;
-    pub const INTERFACE_NAME: &str = "speed test";
+    pub const INTERFACE_NAME: &str = "速度测试";
 }
 
 #[cfg(feature = "bluer")]
@@ -90,9 +90,9 @@ fn tls_key() -> PrivateKeyDer<'static> {
     private_key(&mut reader).unwrap().unwrap()
 }
 
-/// Accepts every TLS server certificate.
+/// 接受任意 TLS 服务器证书。
 ///
-/// For speed test only! Do not use in production code!
+/// 仅供速度测试使用，切勿用于生产环境！
 #[derive(Debug)]
 struct TlsNullVerifier;
 
@@ -149,41 +149,41 @@ fn tls_server_config() -> ServerConfig {
 
 fn debug_warning() -> String {
     match cfg!(debug_assertions) {
-        true => "⚠ debug build: speeds will be slow ⚠\n".red().to_string(),
+        true => "⚠ 调试构建：速度会偏慢 ⚠\n".red().to_string(),
         false => String::new(),
     }
 }
 
-/// Run speed test using a connection consisting of aggregated TCP links.
+/// 使用聚合的 TCP 链路运行速度测试。
 ///
-/// This uses Aggligator to combine multiple TCP links into one connection,
-/// providing the combined speed and resilience to individual link faults.
+/// Aggligator 会将多条 TCP 链路合并为一个逻辑连接，
+/// 既汇聚所有链路的带宽，也能在单条链路故障时保持连接稳定。
 #[derive(Parser)]
 #[command(name = "agg-speed", author, version)]
 pub struct SpeedCli {
-    /// Configuration file.
+    /// 配置文件。
     #[arg(long)]
     cfg: Option<PathBuf>,
-    /// Dump analysis data to file.
+    /// 将分析数据写入文件。
     #[arg(long, short = 'd')]
     dump: Option<PathBuf>,
-    /// Client or server.
+    /// 选择客户端或服务器模式。
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Aggregated links speed test client.
+    /// 聚合链路速度测试客户端。
     Client(ClientCli),
-    /// Aggregated links speed test server.
+    /// 聚合链路速度测试服务器。
     Server(ServerCli),
-    /// Shows the default configuration.
+    /// 显示默认配置。
     ShowCfg,
-    /// Generate manual pages for this tool in current directory.
+    /// 在当前目录生成该工具的手册页。
     #[command(hide = true)]
     ManPages,
-    /// Generate markdown page for this tool.
+    /// 生成该工具的 Markdown 帮助文档。
     #[command(hide = true)]
     Markdown,
 }
@@ -215,73 +215,73 @@ async fn main() -> Result<()> {
     };
 
     sleep(Duration::from_millis(300)).await;
-    tracing::debug!("exiting main");
+    tracing::debug!("主程序退出");
     res
 }
 
 #[derive(Parser)]
 pub struct ClientCli {
-    /// Use IPv4.
+    /// 使用 IPv4。
     #[arg(long, short = '4')]
     ipv4: bool,
-    /// Use IPv6.
+    /// 使用 IPv6。
     #[arg(long, short = '6')]
     ipv6: bool,
-    /// Limit test data to specified number of MB.
+    /// 限制测试传输的数据量（单位：MB）。
     #[arg(long, short = 'l')]
     limit: Option<usize>,
-    /// Limit test duration to specified number of seconds.
+    /// 限制测试持续时间（单位：秒）。
     #[arg(long, short = 't')]
     time: Option<u64>,
-    /// Only measure send speed.
+    /// 仅测试发送速度。
     #[arg(long, short = 's')]
     send_only: bool,
-    /// Only measure receive speed.
+    /// 仅测试接收速度。
     #[arg(long, short = 'r')]
     recv_only: bool,
-    /// Block the receiver
+    /// 阻塞接收端。
     #[arg(long, short = 'b')]
     recv_block: bool,
-    /// Do not display the link monitor.
+    /// 不显示链路监视器。
     #[arg(long, short = 'n')]
     no_monitor: bool,
-    /// Display all possible (including disconnected) links in the link monitor.
+    /// 在监视器中显示所有可能的链路（包括未连接的链路）。
     #[arg(long, short = 'a')]
     all_links: bool,
-    /// Output speed report in JSON format.
+    /// 以 JSON 格式输出速度报告。
     #[arg(long, short = 'j')]
     json: bool,
-    /// Encrypt all links using TLS, without authenticating server.
+    /// 使用 TLS 加密所有链路，不校验服务器身份。
     ///
-    /// Warning: no server authentication is performed!
+    /// 警告：不会执行任何服务器身份验证！
     #[arg(long)]
     tls: bool,
-    /// TCP server name or IP addresses and port number.
+    /// TCP 服务器的名称或 IP 地址与端口号。
     #[arg(long)]
     tcp: Vec<String>,
-    /// TCP link filter.
+    /// TCP 链路过滤方式。
     ///
-    /// none: no link filtering.
+    /// none：不过滤任何链路。
     ///
-    /// interface-interface: one link for each pair of local and remote interface.
+    /// interface-interface：为每对本地和远端网卡创建一条链路。
     ///
-    /// interface-ip: one link for each pair of local interface and remote IP address.
+    /// interface-ip：为每个本地网卡与远端 IP 的组合创建一条链路。
     #[arg(long, value_parser = parse_tcp_link_filter, default_value = "interface-interface")]
     tcp_link_filter: TcpLinkFilter,
-    /// WebSocket hosts or URLs.
+    /// WebSocket 主机或 URL。
     ///
-    /// Default server port number is 8080 and path is /agg-speed.
+    /// 默认端口为 8080，路径为 /agg-speed。
     #[arg(long)]
     websocket: Vec<String>,
-    /// Bluetooth RFCOMM server address.
+    /// 蓝牙 RFCOMM 服务器地址。
     #[cfg(feature = "bluer")]
     #[arg(long, value_parser=parse_rfcomm)]
     rfcomm: Option<aggligator_transport_bluer::rfcomm::SocketAddr>,
-    /// Bluetooth RFCOMM profile server address.
+    /// 蓝牙 RFCOMM Profile 服务器地址。
     #[cfg(feature = "bluer")]
     #[arg(long)]
     rfcomm_profile: Option<aggligator_transport_bluer::rfcomm_profile::Address>,
-    /// USB device serial number (equals hostname of speed test device).
+    /// USB 设备序列号（等同于测速设备的主机名）。
     #[cfg(feature = "usb-host")]
     #[arg(long)]
     usb: Option<String>,
@@ -323,7 +323,7 @@ impl ClientCli {
 
         if !self.tcp.is_empty() {
             let mut tcp_connector =
-                TcpConnector::new(self.tcp.clone(), TCP_PORT).await.context("cannot resolve TCP target")?;
+                TcpConnector::new(self.tcp.clone(), TCP_PORT).await.context("无法解析 TCP 目标")?;
             tcp_connector.set_ip_version(ip_version);
             tcp_connector.set_link_filter(self.tcp_link_filter);
             targets.push(tcp_connector.to_string());
@@ -341,7 +341,7 @@ impl ClientCli {
         if let Some(addr) = self.rfcomm_profile {
             let rfcomm_profile_connector = RfcommProfileConnector::new(addr, RFCOMM_UUID)
                 .await
-                .context("RFCOMM profile connector failed")?;
+                .context("RFCOMM Profile 连接器初始化失败")?;
             targets.push(addr.to_string());
             connector.add(rfcomm_profile_connector);
         }
@@ -364,9 +364,8 @@ impl ClientCli {
                     && iface.protocol_code == usb::INTERFACE_PROTOCOL
                     && iface.description.as_deref() == Some(usb::INTERFACE_NAME)
             };
-            let usb_connector =
-                aggligator_transport_usb::UsbConnector::new(filter).context("cannot initialize USB")?;
-            targets.push(format!("USB {serial}"));
+            let usb_connector = aggligator_transport_usb::UsbConnector::new(filter).context("无法初始化 USB")?;
+            targets.push(format!("USB 设备 {serial}"));
             connector.add(usb_connector);
         }
 
@@ -379,18 +378,18 @@ impl ClientCli {
                 url
             });
             let mut ws_connector =
-                WebSocketConnector::new(websockets).await.context("cannot resolve WebSocket target")?;
+                WebSocketConnector::new(websockets).await.context("无法解析 WebSocket 目标")?;
             ws_connector.set_ip_version(ip_version);
             targets.push(ws_connector.to_string());
             connector.add(ws_connector);
         }
 
         if targets.is_empty() {
-            bail!("No connection transports.");
+            bail!("未指定任何连接传输方式。");
         }
 
         let target = targets.join(", ");
-        let title = format!("Speed test against {target} {}", if self.tls { "with TLS" } else { "" });
+        let title = format!("对 {target} 进行速度测试{}", if self.tls { "（启用 TLS）" } else { "" });
 
         let outgoing = connector.channel().unwrap();
         let control = connector.control();
@@ -430,9 +429,9 @@ impl ClientCli {
                     let (send, recv) = *speed_rx.borrow_and_update();
                     let speed = format!(
                         "{}{}\r\n{}{}\r\n",
-                        "Upstream:   ".grey(),
+                        "上行：   ".grey(),
                         format_speed(send),
-                        "Downstream: ".grey(),
+                        "下行： ".grey(),
                         format_speed(recv)
                     );
                     let header = format!("{}\r\n\r\n{}{}", title.clone().bold(), speed, debug_warning());
@@ -449,7 +448,7 @@ impl ClientCli {
         }
 
         let speed_test = async move {
-            let ch = outgoing.await.context("cannot establish aggligator connection")?;
+            let ch = outgoing.await.context("无法建立 Aggligator 连接")?;
             let (r, w) = ch.into_stream().into_split();
             anyhow::Ok(
                 speed_test(
@@ -489,7 +488,7 @@ impl ClientCli {
             match task.await {
                 Ok(res) => res?,
                 Err(_) => {
-                    println!("Exiting...");
+                    println!("正在退出…");
                     control.terminated().await?;
                     return Ok(());
                 }
@@ -505,11 +504,11 @@ impl ClientCli {
             };
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         } else {
-            println!("Upstream:   {}", format_speed(tx_speed));
-            println!("Downstream: {}", format_speed(rx_speed));
+            println!("上行速度：{}", format_speed(tx_speed));
+            println!("下行速度：{}", format_speed(rx_speed));
         }
 
-        println!("Exiting...");
+        println!("正在退出…");
         control.terminated().await?;
         Ok(())
     }
@@ -525,30 +524,30 @@ pub struct SpeedReport {
 
 #[derive(Parser)]
 pub struct ServerCli {
-    /// Listen on each network interface individually.
+    /// 在每块网卡上分别监听。
     #[arg(long, short = 'i')]
     individual_interfaces: bool,
-    /// Do not display the link monitor.
+    /// 不显示链路监视器。
     #[arg(long, short = 'n')]
     no_monitor: bool,
-    /// Exit after handling one connection.
+    /// 处理完一条连接后立即退出。
     #[arg(long)]
     oneshot: bool,
-    /// Encrypt all links using TLS.
+    /// 使用 TLS 加密所有链路。
     #[arg(long)]
     tls: bool,
-    /// TCP port to listen on.
+    /// 监听的 TCP 端口。
     #[arg(long, default_value_t = TCP_PORT)]
     tcp: u16,
-    /// RFCOMM channel number to listen on.
+    /// 要监听的 RFCOMM 信道号。
     #[cfg(feature = "bluer")]
     #[arg(long, default_value_t = RFCOMM_CHANNEL)]
     rfcomm: u8,
-    /// Listen on USB device controller (UDC).
+    /// 监听 USB 设备控制器（UDC）。
     #[cfg(feature = "usb-device")]
     #[arg(long)]
     usb: bool,
-    /// WebSocket (HTTP) port to listen on.
+    /// 要监听的 WebSocket（HTTP）端口。
     #[arg(long, default_value_t = WEBSOCKET_PORT)]
     websocket: u16,
 }
@@ -581,10 +580,10 @@ impl ServerCli {
         };
         match tcp_acceptor_res {
             Ok(tcp) => {
-                ports.push(format!("TCP {tcp}"));
+                ports.push(format!("TCP 端口 {tcp}"));
                 acceptor.add(tcp);
             }
-            Err(err) => eprintln!("Cannot listen on TCP port {}: {err}", self.tcp),
+            Err(err) => eprintln!("无法监听 TCP 端口 {}：{err}", self.tcp),
         }
 
         #[cfg(feature = "bluer")]
@@ -596,18 +595,18 @@ impl ServerCli {
         {
             Ok(rfcomm) => {
                 acceptor.add(rfcomm);
-                ports.push(format!("RFCOMM channel {}", self.rfcomm));
+                ports.push(format!("RFCOMM 信道 {}", self.rfcomm));
             }
-            Err(err) => eprintln!("Cannot listen on RFCOMM channel {}: {err}", self.rfcomm),
+            Err(err) => eprintln!("无法监听 RFCOMM 信道 {}：{err}", self.rfcomm),
         }
 
         #[cfg(feature = "bluer")]
         match RfcommProfileAcceptor::new(RFCOMM_UUID).await {
             Ok(rfcomm_profile) => {
                 acceptor.add(rfcomm_profile);
-                ports.push("RFCOMM profile".to_string());
+                ports.push("RFCOMM Profile 服务".to_string());
             }
-            Err(err) => eprintln!("Cannot listen on RFCOMM profile {RFCOMM_UUID}: {err}"),
+            Err(err) => eprintln!("无法监听 RFCOMM Profile {RFCOMM_UUID}：{err}"),
         }
 
         #[cfg(feature = "usb-device")]
@@ -643,11 +642,11 @@ impl ServerCli {
             match register_usb(&serial) {
                 Ok((usb_reg, upc, udc_name)) => {
                     acceptor.add(aggligator_transport_usb::UsbAcceptor::new(upc, &udc_name));
-                    ports.push(format!("UDC {} ({serial})", udc_name.to_string_lossy()));
+                    ports.push(format!("UDC {}（{serial}）", udc_name.to_string_lossy()));
                     Some(usb_reg)
                 }
                 Err(err) => {
-                    eprintln!("Cannot listen on USB: {err}");
+                    eprintln!("无法监听 USB：{err}");
                     None
                 }
             }
@@ -657,23 +656,23 @@ impl ServerCli {
 
         let (wsa, router) = WebSocketAcceptor::new(WEBSOCKET_PATH);
         acceptor.add(wsa);
-        ports.push(format!("WebSocket {}", self.websocket));
+        ports.push(format!("WebSocket 端口 {}", self.websocket));
         let websocket_addr = SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), self.websocket);
         exec::spawn(async move {
             if let Err(err) = axum_server::bind(websocket_addr)
                 .serve(router.into_make_service_with_connect_info::<SocketAddr>())
                 .await
             {
-                eprintln!("Cannot listen on WebSocket {websocket_addr}: {err}");
+                eprintln!("无法监听 WebSocket {websocket_addr}：{err}");
             }
         });
 
         if ports.is_empty() {
-            bail!("No listening transports.");
+            bail!("未配置任何监听传输方式。");
         }
 
         let ports = ports.join(", ");
-        let title = format!("Speed test server listening on {ports} {}", if self.tls { "with TLS" } else { "" });
+        let title = format!("速度测试服务监听于 {ports}{}", if self.tls { "（启用 TLS）" } else { "" });
 
         let tag_error_rx = acceptor.link_errors();
         let (control_tx, control_rx) = broadcast::channel(8);

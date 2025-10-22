@@ -1,4 +1,4 @@
-//! Tunnel TCP connections in aggregated connections.
+//! 在聚合连接中转发 TCP 流量。
 
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -32,7 +32,10 @@ use aggligator::{
 };
 use aggligator_monitor::monitor::{interactive_monitor, watch_tags};
 use aggligator_transport_tcp::{IpVersion, TcpAcceptor, TcpConnector, TcpLinkFilter};
-use aggligator_util::{init_log, load_cfg, parse_tcp_link_filter, print_default_cfg, wait_sigterm};
+use aggligator_util::{
+    ctcp::{self, CtcpWrapper},
+    init_log, load_cfg, parse_tcp_link_filter, print_default_cfg, wait_sigterm,
+};
 
 #[cfg(feature = "bluer")]
 use aggligator_transport_bluer::rfcomm::{RfcommAcceptor, RfcommConnector};
@@ -56,39 +59,39 @@ mod usb {
     pub const INTERFACE_CLASS: u8 = 255;
     pub const INTERFACE_SUB_CLASS: u8 = 240;
     pub const INTERFACE_PROTOCOL: u8 = 1;
-    pub const DEFAULT_INTERFACE_NAME: &str = "agg-tunnel";
+    pub const DEFAULT_INTERFACE_NAME: &str = "聚合隧道";
 }
 
-/// Forward TCP ports through a connection of aggregated links.
+/// 通过聚合链路的连接转发 TCP 端口。
 ///
-/// This uses Aggligator to combine multiple TCP links into one connection,
-/// providing the combined speed and resilience to individual link faults.
+/// Aggligator 会将多条 TCP 链路合并为一个逻辑连接，
+/// 既汇聚所有链路的带宽，也能在单条链路故障时保持连接稳定。
 #[derive(Parser)]
 #[command(name = "agg-tunnel", author, version)]
 pub struct TunnelCli {
-    /// Configuration file.
+    /// 配置文件。
     #[arg(long)]
     cfg: Option<PathBuf>,
-    /// Dump analysis data to file.
+    /// 将分析数据写入文件。
     #[arg(long, short = 'd')]
     dump: Option<PathBuf>,
-    /// Client or server.
+    /// 选择客户端或服务器模式。
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Tunnel client.
+    /// 隧道客户端。
     Client(ClientCli),
-    /// Tunnel server.
+    /// 隧道服务器。
     Server(ServerCli),
-    /// Shows the default configuration.
+    /// 显示默认配置。
     ShowCfg,
-    /// Generate manual pages for this tool in current directory.
+    /// 在当前目录生成该工具的手册页。
     #[command(hide = true)]
     ManPages,
-    /// Generate markdown page for this tool.
+    /// 生成该工具的 Markdown 帮助文档。
     #[command(hide = true)]
     Markdown,
 }
@@ -121,56 +124,59 @@ async fn main() -> Result<()> {
 
 #[derive(Parser)]
 pub struct ClientCli {
-    /// Use IPv4.
+    /// 使用 IPv4。
     #[arg(long, short = '4')]
     ipv4: bool,
-    /// Use IPv6.
+    /// 使用 IPv6。
     #[arg(long, short = '6')]
     ipv6: bool,
-    /// Do not display the link monitor.
+    /// 不显示链路监视器。
     #[arg(long, short = 'n')]
     no_monitor: bool,
-    /// Display all possible (including disconnected) links in the link monitor.
+    /// 在监视器中显示所有可能的链路（包括未连接的链路）。
     #[arg(long, short = 'a')]
     all_links: bool,
-    /// Ports to forward from server to client.
+    /// 指定要从服务器转发到客户端的端口。
     ///
-    /// Takes the form `server_port:client_port` and can be specified multiple times.
+    /// 格式为 `server_port:client_port`，可重复指定。
     ///
-    /// The port must have been enabled on the server.
+    /// 目标端口必须在服务器端启用。
     #[arg(long, short = 'p', value_parser = parse_key_val::<u16, u16>, required=true)]
     port: Vec<(u16, u16)>,
-    /// Forward ports on all local interfaces.
+    /// 在所有本地网卡上监听转发端口。
     ///
-    /// If unspecified only loopback connections are accepted.
+    /// 未指定时仅接受回环接口连接。
     #[arg(long, short = 'g')]
     global: bool,
-    /// Exit after handling one connection.
+    /// 处理完一条连接后立即退出。
     #[arg(long)]
     once: bool,
-    /// TCP server name or IP addresses and port number.
+    /// 自定义 CTCP printable 加密密钥（支持十进制、0x 十六进制、0b 二进制或 0o 八进制，默认沿用 openppp2 的内置值）。
+    #[arg(long, value_name = "KEY", value_parser = parse_ctcp_key, default_value_t = ctcp::DEFAULT_KEY)]
+    ctcp_key: u32,
+    /// TCP 服务器的名称或 IP 地址与端口号。
     #[arg(long)]
     tcp: Vec<String>,
-    /// TCP link filter.
+    /// TCP 链路过滤方式。
     ///
-    /// none: no link filtering.
+    /// none：不过滤任何链路。
     ///
-    /// interface-interface: one link for each pair of local and remote interface.
+    /// interface-interface：为每对本地和远端网卡创建一条链路。
     ///
-    /// interface-ip: one link for each pair of local interface and remote IP address.
+    /// interface-ip：为每个本地网卡与远端 IP 的组合创建一条链路。
     #[arg(long, value_parser = parse_tcp_link_filter, default_value = "interface-interface")]
     tcp_link_filter: TcpLinkFilter,
-    /// Bluetooth RFCOMM server address.
+    /// 蓝牙 RFCOMM 服务器地址。
     #[cfg(feature = "bluer")]
     #[arg(long)]
     rfcomm: Option<aggligator_transport_bluer::rfcomm::SocketAddr>,
-    /// USB device serial number (equals hostname of speed test device).
+    /// USB 设备序列号（等同于测速设备的主机名）。
     ///
-    /// Use - to match any device.
+    /// 使用 - 匹配任意设备。
     #[cfg(feature = "usb-host")]
     #[arg(long)]
     usb: Option<String>,
-    /// USB interface name.
+    /// USB 接口名称。
     #[cfg(feature = "usb-host")]
     #[arg(long, default_value=usb::DEFAULT_INTERFACE_NAME)]
     usb_interface_name: String,
@@ -186,7 +192,7 @@ impl ClientCli {
 
         let mut watch_conn: Vec<Box<dyn ConnectingTransport>> = Vec::new();
         let mut targets = Vec::new();
-
+        let ctcp_key = self.ctcp_key;
         let tcp_connector = if !self.tcp.is_empty() {
             match TcpConnector::new(self.tcp.clone(), TCP_PORT).await {
                 Ok(mut tcp) => {
@@ -197,7 +203,7 @@ impl ClientCli {
                     Some(tcp)
                 }
                 Err(err) => {
-                    eprintln!("cannot use TCP target: {err}");
+                    eprintln!("无法使用 TCP 目标：{err}");
                     None
                 }
             }
@@ -219,7 +225,7 @@ impl ClientCli {
         #[cfg(feature = "usb-host")]
         let usb_connector = {
             if let Some(serial) = &self.usb {
-                targets.push(format!("USB {serial}"));
+                targets.push(format!("USB 设备 {serial}"));
             }
 
             let usb = self.usb.clone();
@@ -248,7 +254,7 @@ impl ClientCli {
                     match aggligator_transport_usb::UsbConnector::new(filter) {
                         Ok(c) => Some(c),
                         Err(err) => {
-                            eprintln!("cannot use USB target: {err}");
+                            eprintln!("无法使用 USB 目标：{err}");
                             None
                         }
                     }
@@ -258,12 +264,12 @@ impl ClientCli {
         };
 
         if targets.is_empty() {
-            bail!("No connection transports.");
+            bail!("未指定任何连接传输方式。");
         }
 
         let target = targets.join(", ");
         let title = format!(
-            "Tunneling ports of {target} (remote->local): {}",
+            "为 {target} 建立端口隧道（远端->本地）：{}",
             ports.iter().map(|(s, l)| format!("{s}->{l}")).collect::<Vec<_>>().join(" ")
         );
 
@@ -279,15 +285,15 @@ impl ClientCli {
                 let _ = SockRef::from(&socket).set_only_v6(false);
                 socket
                     .bind(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), client_port))
-                    .context(format!("cannot bind to local port {client_port}"))?;
+                    .context(format!("无法绑定本地端口 {client_port}"))?;
                 vec![socket.listen(16)?]
             } else {
                 let listener_v4 = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), client_port))
                     .await
-                    .context(format!("cannot bind to local IPv4 port {client_port}"))?;
+                    .context(format!("无法绑定本地 IPv4 端口 {client_port}"))?;
                 let listener_v6 = TcpListener::bind(SocketAddr::new(Ipv6Addr::LOCALHOST.into(), client_port))
                     .await
-                    .context(format!("cannot bind to local IPv6 port {client_port}"))?;
+                    .context(format!("无法绑定本地 IPv6 端口 {client_port}"))?;
                 vec![listener_v4, listener_v6]
             };
 
@@ -309,6 +315,7 @@ impl ClientCli {
                     };
 
                     let mut builder = ConnectorBuilder::new(port_cfg.clone());
+                    builder.wrap(CtcpWrapper::with_key(ctcp_key));
                     if let Some(dump) = dump.clone() {
                         let (tx, rx) = mpsc::channel(DUMP_BUFFER);
                         builder.task().dump(tx);
@@ -361,7 +368,7 @@ impl ClientCli {
 
                     exec::spawn(async move {
                         if no_monitor {
-                            eprintln!("Incoming connection from {src} requests port {client_port}");
+                            eprintln!("来自 {src} 的连接请求端口 {client_port}");
                         }
 
                         let ch = outgoing.await?;
@@ -373,7 +380,7 @@ impl ClientCli {
                         forward(server_read, client_write).await?;
 
                         if no_monitor {
-                            eprintln!("Incoming connection from {src} done");
+                            eprintln!("来自 {src} 的连接已结束");
                         }
 
                         if once {
@@ -419,28 +426,31 @@ impl ClientCli {
 
 #[derive(Parser)]
 pub struct ServerCli {
-    /// Do not display the link monitor.
+    /// 不显示链路监视器。
     #[arg(long, short = 'n')]
     no_monitor: bool,
-    /// Ports to forward to clients.
+    /// 指定要转发给客户端的端口。
     ///
-    /// Takes the form `port` or `target:port` and can be specified multiple times.
+    /// 格式为 `port` 或 `target:port`，可重复指定。
     ///
-    /// Target can be a host name or IP address. If unspecified localhost is used as target.
+    /// 目标可以是主机名或 IP 地址；未指定时默认使用 localhost。
     #[arg(long, short = 'p', value_parser = parse_key_val::<String, u16>, required=true)]
     port: Vec<(String, u16)>,
-    /// TCP port to listen on.
+    /// 要监听的 TCP 端口。
     #[arg(long)]
     tcp: Option<u16>,
-    /// RFCOMM channel number to listen on.
+    /// 自定义 CTCP printable 加密密钥（支持十进制、0x 十六进制、0b 二进制或 0o 八进制，默认沿用 openppp2 的内置值）。
+    #[arg(long, value_name = "KEY", value_parser = parse_ctcp_key, default_value_t = ctcp::DEFAULT_KEY)]
+    ctcp_key: u32,
+    /// 要监听的 RFCOMM 信道号。
     #[cfg(feature = "bluer")]
     #[arg(long)]
     rfcomm: Option<u8>,
-    /// Listen on USB device controller (UDC).
+    /// 监听 USB 设备控制器（UDC）。
     #[cfg(feature = "usb-device")]
     #[arg(long)]
     usb: bool,
-    /// USB interface name.
+    /// USB 接口名称。
     #[cfg(feature = "usb-host")]
     #[arg(long, default_value=usb::DEFAULT_INTERFACE_NAME)]
     usb_interface_name: String,
@@ -461,11 +471,12 @@ impl ServerCli {
         );
 
         let title = format!(
-            "Serving targets: {}",
+            "发布的端口：{}",
             ports.iter().map(|(port, target)| format!("{target}->{port}")).collect::<Vec<_>>().join(" ")
         );
 
         let mut builder = AcceptorBuilder::new(cfg);
+        builder.wrap(CtcpWrapper::with_key(self.ctcp_key));
         if let Some(dump) = dump {
             builder.set_task_cfg(move |task| {
                 let (tx, rx) = mpsc::channel(DUMP_BUFFER);
@@ -480,10 +491,10 @@ impl ServerCli {
         if let Some(port) = self.tcp {
             match TcpAcceptor::new([SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port)]).await {
                 Ok(tcp) => {
-                    server_ports.push(format!("TCP {tcp}"));
+                    server_ports.push(format!("TCP 端口 {tcp}"));
                     acceptor.add(tcp);
                 }
-                Err(err) => eprintln!("Cannot listen on TCP port {port}: {err}"),
+                Err(err) => eprintln!("无法监听 TCP 端口 {port}：{err}"),
             }
         }
 
@@ -497,9 +508,9 @@ impl ServerCli {
             {
                 Ok(rfcomm) => {
                     acceptor.add(rfcomm);
-                    server_ports.push(format!("RFCOMM channel {ch}"));
+                    server_ports.push(format!("RFCOMM 信道 {ch}"));
                 }
-                Err(err) => eprintln!("Cannot listen on RFCOMM channel {ch}: {err}"),
+                Err(err) => eprintln!("无法监听 RFCOMM 信道 {ch}：{err}"),
             }
         }
 
@@ -536,11 +547,11 @@ impl ServerCli {
             match register_usb(&serial, &self.usb_interface_name) {
                 Ok((usb_reg, upc, udc_name)) => {
                     acceptor.add(aggligator_transport_usb::UsbAcceptor::new(upc, &udc_name));
-                    server_ports.push(format!("UDC {} ({serial})", udc_name.to_string_lossy()));
+                    server_ports.push(format!("UDC {}（{serial}）", udc_name.to_string_lossy()));
                     Some(usb_reg)
                 }
                 Err(err) => {
-                    eprintln!("Cannot listen on USB: {err}");
+                    eprintln!("无法监听 USB：{err}");
                     None
                 }
             }
@@ -549,7 +560,7 @@ impl ServerCli {
         };
 
         if server_ports.is_empty() {
-            bail!("No listening transports.");
+            bail!("未配置任何监听传输方式。");
         }
 
         let (control_tx, control_rx) = broadcast::channel(16);
@@ -579,7 +590,7 @@ impl ServerCli {
                     let name = if let Ok((port, target)) = target_rx.await {
                         format!("{port} -> {target}")
                     } else {
-                        "unknown".to_string()
+                        "未知".to_string()
                     };
                     let _ = control_tx.send((control, name));
                 });
@@ -591,7 +602,7 @@ impl ServerCli {
                         Self::handle_client(ports, client_write, client_read, !no_monitor, target_tx).await
                     {
                         if no_monitor {
-                            eprintln!("Connection {id} failed: {err}");
+                            eprintln!("连接 {id} 失败：{err}");
                         }
                     }
                 });
@@ -628,24 +639,24 @@ impl ServerCli {
         if let Some(target) = ports.get(&port) {
             let _ = target_tx.send((port, target.clone()));
             if !quiet {
-                eprintln!("Client wants port {port} which connects to {target}");
+                eprintln!("客户端请求的端口 {port} 连接到 {target}");
             }
 
             let socket = TcpStream::connect(target).await?;
             let (target_read, target_write) = socket.into_split();
 
             if !quiet {
-                eprintln!("Connection to {target} established, starting forwarding");
+                eprintln!("已连接到 {target}，开始转发");
             }
 
             exec::spawn(forward(client_read, target_write));
             forward(target_read, client_write).await?;
 
             if !quiet {
-                eprintln!("Forwarding for {target} done");
+                eprintln!("对 {target} 的转发已完成");
             }
         } else if !quiet {
-            eprintln!("Client wants port {port} which is not published");
+            eprintln!("客户端请求的端口 {port} 尚未发布");
         }
 
         Ok(())
@@ -679,6 +690,29 @@ async fn forward(mut read: impl AsyncRead + Unpin, mut write: impl AsyncWrite + 
 
     write.flush().await?;
     Ok(())
+}
+
+fn parse_ctcp_key(value: &str) -> std::result::Result<u32, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("CTCP 密钥不能为空".into());
+    }
+
+    let (radix, digits) = if let Some(rest) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+        (2, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+        (8, rest)
+    } else {
+        (10, trimmed)
+    };
+
+    if digits.is_empty() {
+        return Err("CTCP 密钥不能为空".into());
+    }
+
+    u32::from_str_radix(&digits.replace('_', ""), radix).map_err(|err| format!("无法解析 CTCP 密钥：{err}"))
 }
 
 fn parse_key_val<T, U>(s: &str) -> std::result::Result<(T, U), Box<dyn std::error::Error + Send + Sync + 'static>>
