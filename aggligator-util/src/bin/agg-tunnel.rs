@@ -512,7 +512,10 @@ impl ServerCli {
                 .clone()
                 .into_iter()
                 .map(|(target, port)| {
-                    (port, if target.is_empty() { format!("127.0.0.1:{port}") } else { target })
+                    (
+                        port,
+                        if target.is_empty() { format!("127.0.0.1:{port}") } else { format!("{target}:{port}") },
+                    )
                 })
                 .collect(),
         );

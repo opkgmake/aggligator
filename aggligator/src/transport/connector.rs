@@ -347,6 +347,7 @@ impl Connector {
         let (tags_tx, mut tags_rx) = watch::channel(HashSet::new());
         let mut tags_task = transport.link_tags(tags_tx);
         let mut tags_changed = true;
+        let mut tags_cache = HashSet::new();
 
         let mut connecting_tags = HashSet::new();
         let mut connecting_tasks = FuturesUnordered::new();
@@ -367,31 +368,32 @@ impl Connector {
                 }
 
                 // Get and forward available tags from transport.
-                let tags = tags_rx.borrow_and_update().clone();
                 if tags_changed {
+                    tags_cache = tags_rx.borrow_and_update().clone();
                     tracing::debug!(
                         "available tags: {}",
-                        tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>().join(", ")
+                        tags_cache.iter().map(|tag| tag.to_string()).collect::<Vec<_>>().join(", ")
                     );
-                    tags_fw_tx.send_replace(tags.clone());
+                    tags_fw_tx.send_replace(tags_cache.clone());
                     tags_changed = false;
                 }
 
                 // Connect available but unconnected tags.
-                for tag in tags {
+                for tag in tags_cache.iter() {
                     if tag.transport_name() != transport.name() {
                         break 'outer Err(Error::other("link tag transport name mismatch"));
                     }
 
-                    if connecting_tags.contains(&tag)
-                        || disabled_tags.contains(&tag)
-                        || link_filter_rejected_tags.contains(&tag)
-                        || links.iter().any(|link| link.tag() == &tag)
+                    if connecting_tags.contains(tag)
+                        || disabled_tags.contains(tag)
+                        || link_filter_rejected_tags.contains(tag)
+                        || links.iter().any(|link| link.tag() == tag)
                     {
                         continue;
                     }
 
                     tracing::debug!(%tag, "connecting tag");
+                    let tag = tag.clone();
                     connecting_tags.insert(tag.clone());
 
                     let connect_task = async {
