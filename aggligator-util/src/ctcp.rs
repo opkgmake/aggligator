@@ -9,7 +9,7 @@ use std::{
 use aggligator::io::{StreamBox, TxRxBox};
 use aggligator::transport::{AcceptingWrapper, ConnectingWrapper};
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures::{Sink, Stream};
 use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
@@ -296,7 +296,7 @@ impl Stream for CtcpRx {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn random_range(rng: &mut SmallRng, min: u8, max: u8) -> u8 {
     debug_assert!(min < max);
     let span = u32::from(max - min);
@@ -304,7 +304,7 @@ fn random_range(rng: &mut SmallRng, min: u8, max: u8) -> u8 {
     min.wrapping_add(value as u8)
 }
 
-#[inline]
+#[inline(always)]
 fn fast_mod_u32(value: u32, modulus: u32) -> u32 {
     debug_assert!(modulus > 0);
     ((value as u64 * modulus as u64) >> 32) as u32
@@ -524,9 +524,10 @@ fn shuffle_bytes(data: &mut [u8], key: u32) {
     }
 
     let len_u32 = len as u32;
+    let ptr = data.as_mut_ptr();
     for i in 0..len {
         let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
-        data.swap(i, j);
+        unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
     }
 }
 
@@ -538,9 +539,10 @@ fn unshuffle_bytes(data: &mut [u8], key: u32) {
     }
 
     let len_u32 = len as u32;
+    let ptr = data.as_mut_ptr();
     for i in (0..len).rev() {
         let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
-        data.swap(i, j);
+        unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
     }
 }
 
@@ -579,17 +581,37 @@ fn base94_encode_into(data: &[u8], key: u8, out: &mut BytesMut) {
     const BASE93: u8 = BASE94 - 1;
 
     out.clear();
-    out.reserve(data.len() * 2);
+
+    let mut extra = 0usize;
+    for &byte in data {
+        if byte.wrapping_sub(key) >= BASE93 {
+            extra += 1;
+        }
+    }
+
+    let target_len = data.len() + extra;
+    out.resize(target_len, 0);
+
+    let mut offset = 0;
+    let ptr = out.as_mut_ptr();
     for &byte in data {
         let adjusted = byte.wrapping_sub(key);
-        if adjusted >= BASE93 {
-            let high = ((adjusted / BASE93) - 1) + BASE93;
-            let low = adjusted % BASE93;
-            out.put_u8(0x20 + high);
-            out.put_u8(0x20 + low);
-        } else {
-            out.put_u8(0x20 + adjusted);
+        unsafe {
+            if adjusted >= BASE93 {
+                let high = ((adjusted / BASE93) - 1) + BASE93;
+                let low = adjusted % BASE93;
+                ptr.add(offset).write(0x20 + high);
+                ptr.add(offset + 1).write(0x20 + low);
+                offset += 2;
+            } else {
+                ptr.add(offset).write(0x20 + adjusted);
+                offset += 1;
+            }
         }
+    }
+
+    unsafe {
+        out.set_len(offset);
     }
 }
 
@@ -599,28 +621,26 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
     const BASE93: u8 = BASE94 - 1;
 
     out.clear();
-    out.reserve(data.len());
 
-    let mut index = 0;
-    while index < data.len() {
+    let mut index = 0usize;
+    let mut escapes = 0usize;
+    let len = data.len();
+
+    while index < len {
         let raw = data[index];
-        if !(PRINTABLE_START..=PRINTABLE_END).contains(&raw) {
+        if raw < PRINTABLE_START || raw > PRINTABLE_END {
             return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
         }
 
         let value = raw - 0x20;
-        if value > BASE94 {
-            return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 符号溢出"));
-        }
-
         if value >= BASE93 {
             index += 1;
-            if index >= data.len() {
+            if index >= len {
                 return Err(io::Error::new(ErrorKind::UnexpectedEof, "CTCP 高位缺失"));
             }
 
             let next_raw = data[index];
-            if !(PRINTABLE_START..=PRINTABLE_END).contains(&next_raw) {
+            if next_raw < PRINTABLE_START || next_raw > PRINTABLE_END {
                 return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
             }
 
@@ -634,12 +654,40 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
                 return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 组合字节超界"));
             }
 
-            out.put_u8((combined as u8).wrapping_add(key));
-        } else {
-            out.put_u8(value.wrapping_add(key));
+            escapes += 1;
         }
 
         index += 1;
+    }
+
+    out.resize(len - escapes, 0);
+
+    index = 0;
+    let mut out_offset = 0usize;
+    let ptr = out.as_mut_ptr();
+
+    while index < len {
+        let raw = unsafe { *data.get_unchecked(index) };
+        let value = raw - 0x20;
+
+        unsafe {
+            if value >= BASE93 {
+                index += 1;
+                let next_raw = *data.get_unchecked(index);
+                let next = next_raw - 0x20;
+                let combined = ((value - BASE93 + 1) as u16) * (BASE93 as u16) + (next as u16);
+                ptr.add(out_offset).write((combined as u8).wrapping_add(key));
+            } else {
+                ptr.add(out_offset).write(value.wrapping_add(key));
+            }
+        }
+
+        out_offset += 1;
+        index += 1;
+    }
+
+    unsafe {
+        out.set_len(out_offset);
     }
 
     Ok(())
