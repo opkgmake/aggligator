@@ -1,76 +1,81 @@
-name: Rust
+name: Build binaries (manual)
 
 on:
-  push:
-  pull_request:
-
-env:
-  CARGO_TERM_COLOR: always
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch, tag, or SHA)"
+        required: false
+        default: "master"
 
 jobs:
-  build:
-    name: Build with latest stable Rust
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt install libdbus-1-dev pkg-config
-      - name: Install latest stable Rust
-        run: rustup set profile default && rustup default stable && rustup update && rustup target add wasm32-unknown-unknown
-      - name: Check code formatting
-        run: cargo fmt -- --check
-      - name: Build
-        run: cargo build --features bluer,usb-device,usb-host,raw-speed-cli,dump --all-targets --quiet
-      - name: Build aggligator-transport-webusb
-        run: cd aggligator-transport-webusb && cargo build --quiet
-      - name: Build aggligator-transport-websocket-web
-        run: cd aggligator-transport-websocket-web && cargo build --quiet        
-      - name: Build documentation
-        run: cargo doc --no-deps --quiet
-      - name: Code analysis
-        run: cargo clippy --features bluer,usb-device,usb-host,raw-speed-cli,dump --all-targets --quiet
-      - name: Run tests (debug)
-        run: cargo test --quiet
-      - name: Run tests (release)
-        run: cargo test --release --quiet
-      - name: Run agg-speed
-        run: |
-          cargo build --quiet --release --bin agg-speed
-          RUST_LOG=info cargo run --quiet --release --bin agg-speed -- server --tls --no-monitor --oneshot &
-          sleep 1
-          RUST_LOG=info cargo run --quiet --release --bin agg-speed -- client --tls --no-monitor --time 15 --tcp localhost
-      - name: Security vulnerability audit
-        run: |
-          cargo install --quiet cargo-audit
-          cargo audit --quiet
+  bins:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - os: macos-latest
+          - os: windows-latest
 
-  build-windows:
-    name: Build with latest stable Rust on Windows
-    runs-on: windows-latest
     steps:
-      - uses: ilammy/setup-nasm@v1
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - name: Install latest stable Rust
-        run: rustup set profile default && rustup default stable && rustup update
-      - name: Build
-        run: cargo build --workspace --exclude aggligator-transport-bluer --features usb-host,raw-speed-cli,dump --all-targets --quiet
-      - name: Run tests (debug)
-        run: cargo test --workspace --exclude aggligator-transport-bluer --quiet
+          ref: ${{ github.event.inputs.ref || 'master' }}
 
-  build-msrv:
-    name: Build with Rust 1.85
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+      - name: Install MUSL toolchain (Linux targets)
+        if: runner.os == 'Linux' && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install cross target (if any)
+        if: matrix.target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --target ${{ matrix.target }} --bin agg-speed --bin agg-tunnel
+          else
+            cargo build --release --bin agg-speed --bin agg-tunnel
+          fi
+        shell: bash
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --bin agg-speed --bin agg-tunnel
+        shell: pwsh
+
+      - name: Collect artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p bin
+          if [ -n "${{ matrix.target }}" ]; then
+            cp target/${{ matrix.target }}/release/agg-speed bin/
+            cp target/${{ matrix.target }}/release/agg-tunnel bin/
+          else
+            cp target/release/agg-speed bin/
+            cp target/release/agg-tunnel bin/
+          fi
+        shell: bash
+
+      - name: Collect artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
+          Copy-Item .\target\release\agg-speed.exe .\bin\
+          Copy-Item .\target\release\agg-tunnel.exe .\bin\
+        shell: pwsh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          submodules: recursive
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt install libdbus-1-dev pkg-config
-      - name: Install Rust 1.85.0
-        run: rustup toolchain install 1.85.0
-      - name: Build aggligator and aggligator-util with Rust 1.85.0
-        run: cargo +1.85.0 build --features bluer,usb-device,usb-host,raw-speed-cli,dump --all-targets --quiet
+          name: aggligator-${{ matrix.target || matrix.os }}
+          path: bin
