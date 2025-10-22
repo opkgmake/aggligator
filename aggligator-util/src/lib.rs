@@ -8,6 +8,9 @@
 
 //! Aggligator 命令行工具集。
 
+/// 提供基于 openppp2 的 CTCP 可打印包装器。
+pub mod ctcp;
+
 use anyhow::{bail, Context};
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};

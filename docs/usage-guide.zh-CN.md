@@ -103,6 +103,8 @@ agg-tunnel server --tcp 5700 --port 22 --port 3389
 
 - `--port` 可重复使用，用于声明希望转发给客户端的端口列表。
 - 可以与 `agg-speed server` 一样使用 `--tcp` 指定监听端口。
+- 从本版本起，`agg-tunnel` 会自动在链路上启用基于 openppp2 的 CTCP 可打印加密，所有数据都会被编码为 ASCII 可打印字符，以便在只能放行文本的网络中工作，无需额外配置。
+- 如需替换默认的 CTCP 密钥，可追加 `--ctcp-key <KEY>`（支持十进制、0x 十六进制等写法），客户端需使用相同密钥；未指定时沿用 openppp2 的默认值。
 
 ### 5.2 启动客户端
 
@@ -117,6 +119,7 @@ agg-tunnel client --tcp server.example.com:5700 --port 22:10022 --port 3389
   - `远端端口:本地端口`：自定义本地监听端口，例如上例将远端 `22` 转发为本地 `10022`。
 - 若希望在所有网卡上开放本地端口，可添加 `--global`。
 - 若要在客户端上看到所有潜在链路（含未连接的），可使用 `--all-links`。
+- 客户端默认复用 openppp2 的 CTCP printable 密钥；若服务端使用 `--ctcp-key` 指定了新密钥，也需要在客户端同步设置，以保持链路兼容。
 
 客户端启动后，可在本地通过 `ssh localhost -p 10022` 等命令访问相应服务，流量会自动分布到多条底层链路上。
 
@@ -137,7 +140,35 @@ agg-tunnel show-cfg > agg-tunnel.yaml
 - **性能不理想**：使用 `agg-speed client --dump output.json` 导出分析数据，在支持 Serde 的工具中查看瓶颈；同时关注 CPU 占用、链路 RTT、丢包情况。
 - **连接偶发中断**：确认各条链路的稳定性，必要时减少不稳定的接口，或调整配置以延长重试与超时时间。
 
-## 8. 更多资源
+## 8. 与 openppp2 的 CTCP 文本传输配合
+
+在不少教学和内网实验场景中，Aggligator 会与 [liulilittle/openppp2](https://github.com/liulilittle/openppp2) 项目一同使用，通过 CTCP
+（Character-based TCP）管道传输纯文本。以下步骤演示如何在两台主机间搭配部署：
+
+1. **获取 openppp2 代码**：
+   ```bash
+   gh repo clone liulilittle/openppp2
+   cd openppp2
+   ```
+   如果未安装 GitHub CLI，也可以使用 `git clone https://github.com/liulilittle/openppp2.git`。
+2. **准备 CTCP 服务端**：按照仓库中的说明启动 `openppp2` 的可执行文件，监听待转发的纯文本端口（通常位于 9000～9100 等高位端口，便于区分）。
+3. **在 CTCP 端口上方部署 Aggligator**：
+   - 在暴露 CTCP 服务的主机上运行：
+     ```bash
+     agg-tunnel server --tcp 5700 --port 9000
+     ```
+     这样 Aggligator 会将多个底层链路聚合后，把 9000 端口的数据转发给客户端。
+   - 在需要访问 CTCP 服务的主机上运行：
+     ```bash
+     agg-tunnel client --tcp server.example.com:5700 --port 9000:19000
+     ```
+     客户端会在本地监听 19000 端口，供 openppp2 客户端或自定义脚本连接。
+4. **连接 CTCP 服务**：本地的 openppp2 客户端改为连接 `127.0.0.1:19000`，底层数据会经由 Aggligator 聚合链路传输，仍保持 CTCP
+   “可打印纯文本”的语义。
+
+如需 TLS 加密或链路筛选，可在上述命令中继续加入 `--tls`、`--tcp-link-filter` 等选项。若要替换为更高强度的 printable 加密密钥，也可以在两端同时使用 `--ctcp-key`。建议在首次配置后使用 `agg-speed` 进行吞吐量验证，确认链路质量满足预期。
+
+## 9. 更多资源
 
 - 项目主页与英文文档：参见仓库根目录 `README.md`。
 - 传输插件与 TLS 包装器的详细 API：查阅各个 crate 的 `docs.rs` 页面。

@@ -59,7 +59,7 @@ Aggligator 支持编译为 `wasm32-unknown-unknown`、`wasm32-wasip1` 和 `wasm3
 下列 crate 提供实用函数与命令行工具：
 
 - [aggligator-monitor] —— 文本界面的链路监控与测速工具；
-- [aggligator-util] —— 包含多种命令行工具，例如 TCP 隧道等。
+- [aggligator-util] —— 包含多种命令行工具，`agg-tunnel` 现已默认启用 CTCP 可打印加密，适合与文本白名单网络或 openppp2 协同；同时提供 `--ctcp-key` 选项，可自定义加密密钥。
 
 [aggligator-monitor]: https://crates.io/crates/aggligator-monitor
 [aggligator-util]: https://crates.io/crates/aggligator-util
@@ -96,4 +96,4 @@ Aggligator 遵循 [Apache 2.0 许可证]。
 
 ## 中文使用说明
 
-我们在《[Aggligator 中文使用指南](docs/usage-guide.zh-CN.md)》中提供了更详细的安装、部署与示例说明，建议在上手之前阅读。
+我们在《[Aggligator 中文使用指南](docs/usage-guide.zh-CN.md)》中提供了更详细的安装、部署与示例说明，并新增了与 `liulilittle/openppp2` 项目协同的 CTCP 文本传输范例；本仓库的 `agg-tunnel` 默认启用该 printable 管道，并支持通过 `--ctcp-key` 自定义密钥，建议在上手之前阅读。

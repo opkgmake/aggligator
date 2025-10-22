@@ -2,11 +2,6 @@ name: Build binaries (manual)
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref to build (branch, tag, or SHA)"
-        required: false
-        default: "master"
 
 jobs:
   bins:

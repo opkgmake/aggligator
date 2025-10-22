@@ -32,7 +32,10 @@ use aggligator::{
 };
 use aggligator_monitor::monitor::{interactive_monitor, watch_tags};
 use aggligator_transport_tcp::{IpVersion, TcpAcceptor, TcpConnector, TcpLinkFilter};
-use aggligator_util::{init_log, load_cfg, parse_tcp_link_filter, print_default_cfg, wait_sigterm};
+use aggligator_util::{
+    ctcp::{self, CtcpWrapper},
+    init_log, load_cfg, parse_tcp_link_filter, print_default_cfg, wait_sigterm,
+};
 
 #[cfg(feature = "bluer")]
 use aggligator_transport_bluer::rfcomm::{RfcommAcceptor, RfcommConnector};
@@ -148,6 +151,9 @@ pub struct ClientCli {
     /// 处理完一条连接后立即退出。
     #[arg(long)]
     once: bool,
+    /// 自定义 CTCP printable 加密密钥（支持十进制、0x 十六进制、0b 二进制或 0o 八进制，默认沿用 openppp2 的内置值）。
+    #[arg(long, value_name = "KEY", value_parser = parse_ctcp_key, default_value_t = ctcp::DEFAULT_KEY)]
+    ctcp_key: u32,
     /// TCP 服务器的名称或 IP 地址与端口号。
     #[arg(long)]
     tcp: Vec<String>,
@@ -186,7 +192,7 @@ impl ClientCli {
 
         let mut watch_conn: Vec<Box<dyn ConnectingTransport>> = Vec::new();
         let mut targets = Vec::new();
-
+        let ctcp_key = self.ctcp_key;
         let tcp_connector = if !self.tcp.is_empty() {
             match TcpConnector::new(self.tcp.clone(), TCP_PORT).await {
                 Ok(mut tcp) => {
@@ -309,6 +315,7 @@ impl ClientCli {
                     };
 
                     let mut builder = ConnectorBuilder::new(port_cfg.clone());
+                    builder.wrap(CtcpWrapper::with_key(ctcp_key));
                     if let Some(dump) = dump.clone() {
                         let (tx, rx) = mpsc::channel(DUMP_BUFFER);
                         builder.task().dump(tx);
@@ -432,6 +439,9 @@ pub struct ServerCli {
     /// 要监听的 TCP 端口。
     #[arg(long)]
     tcp: Option<u16>,
+    /// 自定义 CTCP printable 加密密钥（支持十进制、0x 十六进制、0b 二进制或 0o 八进制，默认沿用 openppp2 的内置值）。
+    #[arg(long, value_name = "KEY", value_parser = parse_ctcp_key, default_value_t = ctcp::DEFAULT_KEY)]
+    ctcp_key: u32,
     /// 要监听的 RFCOMM 信道号。
     #[cfg(feature = "bluer")]
     #[arg(long)]
@@ -466,6 +476,7 @@ impl ServerCli {
         );
 
         let mut builder = AcceptorBuilder::new(cfg);
+        builder.wrap(CtcpWrapper::with_key(self.ctcp_key));
         if let Some(dump) = dump {
             builder.set_task_cfg(move |task| {
                 let (tx, rx) = mpsc::channel(DUMP_BUFFER);
@@ -679,6 +690,29 @@ async fn forward(mut read: impl AsyncRead + Unpin, mut write: impl AsyncWrite + 
 
     write.flush().await?;
     Ok(())
+}
+
+fn parse_ctcp_key(value: &str) -> std::result::Result<u32, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("CTCP 密钥不能为空".into());
+    }
+
+    let (radix, digits) = if let Some(rest) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+        (16, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+        (2, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+        (8, rest)
+    } else {
+        (10, trimmed)
+    };
+
+    if digits.is_empty() {
+        return Err("CTCP 密钥不能为空".into());
+    }
+
+    u32::from_str_radix(&digits.replace('_', ""), radix).map_err(|err| format!("无法解析 CTCP 密钥：{err}"))
 }
 
 fn parse_key_val<T, U>(s: &str) -> std::result::Result<(T, U), Box<dyn std::error::Error + Send + Sync + 'static>>
