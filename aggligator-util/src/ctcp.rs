@@ -106,7 +106,7 @@ struct CtcpTx {
     encoded: BytesMut,
     length_buf: [u8; HEADER_XSS + HEADER_MSS],
     rng: SmallRng,
-    short_next: bool,
+    short_only: bool,
 }
 
 impl CtcpTx {
@@ -120,7 +120,7 @@ impl CtcpTx {
             encoded: BytesMut::new(),
             length_buf: [0; HEADER_XSS + HEADER_MSS],
             rng: SmallRng::from_entropy(),
-            short_next: false,
+            short_only: false,
         }
     }
 
@@ -167,7 +167,7 @@ impl CtcpTx {
             self.key,
             &mut self.length_buf,
             &mut self.rng,
-            &mut self.short_next,
+            &mut self.short_only,
         )?;
 
         self.encoded.clear();
@@ -211,7 +211,7 @@ struct CtcpRx {
     key: u32,
     working: BytesMut,
     header_buf: [u8; HEADER_XSS + HEADER_MSS],
-    short_expected: bool,
+    short_only: bool,
 }
 
 impl CtcpRx {
@@ -221,7 +221,7 @@ impl CtcpRx {
             key,
             working: BytesMut::new(),
             header_buf: [0; HEADER_XSS + HEADER_MSS],
-            short_expected: false,
+            short_only: false,
         }
     }
 
@@ -231,7 +231,7 @@ impl CtcpRx {
         }
 
         let (payload_ascii_len, prefix_len) =
-            decode_length_prefix(frame, self.key, &mut self.header_buf, &mut self.short_expected)?;
+            decode_length_prefix(frame, self.key, &mut self.header_buf, &mut self.short_only)?;
 
         if frame.len() < prefix_len + payload_ascii_len {
             return Err(io::Error::new(ErrorKind::UnexpectedEof, "CTCP 报文长度不足"));
@@ -308,7 +308,7 @@ fn random_range(rng: &mut SmallRng, min: u8, max: u8) -> u8 {
 
 fn encode_length_prefix(
     payload_len: usize, key: u32, buffer: &mut [u8; HEADER_XSS + HEADER_MSS], rng: &mut SmallRng,
-    short_next: &mut bool,
+    short_only: &mut bool,
 ) -> Result<usize> {
     if payload_len == 0 {
         return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 负载为空"));
@@ -350,8 +350,7 @@ fn encode_length_prefix(
     prefix[1] = f;
     prefix[..HEADER_XSS].swap(2, 3);
 
-    if *short_next {
-        *short_next = false;
+    if *short_only {
         return Ok(HEADER_XSS);
     }
 
@@ -366,14 +365,14 @@ fn encode_length_prefix(
     extra.copy_from_slice(&digits);
     shuffle_bytes(extra, key);
 
-    *short_next = true;
+    *short_only = true;
     Ok(HEADER_XSS + HEADER_MSS)
 }
 
 fn decode_length_prefix(
-    data: &[u8], key: u32, buffer: &mut [u8; HEADER_XSS + HEADER_MSS], short_expected: &mut bool,
+    data: &[u8], key: u32, buffer: &mut [u8; HEADER_XSS + HEADER_MSS], short_only: &mut bool,
 ) -> Result<(usize, usize)> {
-    if *short_expected {
+    if *short_only {
         if data.len() < HEADER_XSS {
             return Err(io::Error::new(ErrorKind::UnexpectedEof, "CTCP 前缀不足"));
         }
@@ -385,7 +384,6 @@ fn decode_length_prefix(
         if length == 0 {
             return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度为零"));
         }
-        *short_expected = false;
         return Ok((length as usize, HEADER_XSS));
     }
 
@@ -414,7 +412,7 @@ fn decode_length_prefix(
         return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度校验失败"));
     }
 
-    *short_expected = true;
+    *short_only = true;
     Ok((length as usize, HEADER_XSS + HEADER_MSS))
 }
 
@@ -675,59 +673,59 @@ mod tests {
     }
 
     #[test]
-    fn length_prefix_alternates_on_encode() {
+    fn length_prefix_switches_to_short_mode_on_encode() {
         let key = DEFAULT_KEY;
         let mut buffer = [0u8; HEADER_XSS + HEADER_MSS];
         let mut rng = SmallRng::seed_from_u64(1);
-        let mut short_next = false;
+        let mut short_only = false;
 
-        let long = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
+        let long = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_only).unwrap();
         assert_eq!(long, HEADER_XSS + HEADER_MSS);
-        assert!(short_next);
+        assert!(short_only);
 
-        let short = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
+        let short = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_only).unwrap();
         assert_eq!(short, HEADER_XSS);
-        assert!(!short_next);
+        assert!(short_only);
 
-        let long_again = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
-        assert_eq!(long_again, HEADER_XSS + HEADER_MSS);
-        assert!(short_next);
+        let short_again = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_only).unwrap();
+        assert_eq!(short_again, HEADER_XSS);
+        assert!(short_only);
     }
 
     #[test]
-    fn length_prefix_alternates_on_decode() {
+    fn length_prefix_switches_to_short_mode_on_decode() {
         let key = DEFAULT_KEY;
         let mut encode_buffer = [0u8; HEADER_XSS + HEADER_MSS];
         let mut rng = SmallRng::seed_from_u64(2);
-        let mut short_next = false;
+        let mut short_only = false;
 
-        let prefix_long = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
+        let prefix_long = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
         let long_bytes = encode_buffer[..prefix_long].to_vec();
-        let prefix_short = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
+        let prefix_short = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
         let short_bytes = encode_buffer[..prefix_short].to_vec();
-        let prefix_long2 = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
-        let long_bytes2 = encode_buffer[..prefix_long2].to_vec();
+        let prefix_short2 = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
+        let short_bytes2 = encode_buffer[..prefix_short2].to_vec();
 
         let mut decode_buffer = [0u8; HEADER_XSS + HEADER_MSS];
-        let mut short_expected = false;
+        let mut short_only_flag = false;
 
         let (len1, used1) =
-            decode_length_prefix(&long_bytes, key, &mut decode_buffer, &mut short_expected).unwrap();
+            decode_length_prefix(&long_bytes, key, &mut decode_buffer, &mut short_only_flag).unwrap();
         assert_eq!(len1, 256);
         assert_eq!(used1, HEADER_XSS + HEADER_MSS);
-        assert!(short_expected);
+        assert!(short_only_flag);
 
         let (len2, used2) =
-            decode_length_prefix(&short_bytes, key, &mut decode_buffer, &mut short_expected).unwrap();
+            decode_length_prefix(&short_bytes, key, &mut decode_buffer, &mut short_only_flag).unwrap();
         assert_eq!(len2, 256);
         assert_eq!(used2, HEADER_XSS);
-        assert!(!short_expected);
+        assert!(short_only_flag);
 
         let (len3, used3) =
-            decode_length_prefix(&long_bytes2, key, &mut decode_buffer, &mut short_expected).unwrap();
+            decode_length_prefix(&short_bytes2, key, &mut decode_buffer, &mut short_only_flag).unwrap();
         assert_eq!(len3, 256);
-        assert_eq!(used3, HEADER_XSS + HEADER_MSS);
-        assert!(short_expected);
+        assert_eq!(used3, HEADER_XSS);
+        assert!(short_only_flag);
     }
 
     #[test]
