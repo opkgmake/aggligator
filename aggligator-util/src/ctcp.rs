@@ -2,6 +2,7 @@ use std::{
     fmt,
     io::{self, ErrorKind, Result},
     pin::Pin,
+    ptr,
     task::{Context, Poll},
 };
 
@@ -10,7 +11,7 @@ use aggligator::transport::{AcceptingWrapper, ConnectingWrapper};
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{Sink, Stream};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
 /// 默认的 printable CTCP 包装名称。
 const NAME: &str = "ctcp";
@@ -295,9 +296,18 @@ impl Stream for CtcpRx {
     }
 }
 
+#[inline]
 fn random_range(rng: &mut SmallRng, min: u8, max: u8) -> u8 {
     debug_assert!(min < max);
-    rng.gen_range(min..max)
+    let span = u32::from(max - min);
+    let value = fast_mod_u32(rng.next_u32(), span);
+    min.wrapping_add(value as u8)
+}
+
+#[inline]
+fn fast_mod_u32(value: u32, modulus: u32) -> u32 {
+    debug_assert!(modulus > 0);
+    ((value as u64 * modulus as u64) >> 32) as u32
 }
 
 fn encode_length_prefix(
@@ -488,7 +498,20 @@ fn mask_key(key: u32) -> u8 {
 
 /// 逐字节与固定密钥异或。
 fn mask_bytes(data: &mut [u8], key: u8) {
-    for byte in data.iter_mut() {
+    if key == 0 {
+        return;
+    }
+
+    const CHUNK: usize = std::mem::size_of::<u64>();
+    let wide_key = u64::from_ne_bytes([key; CHUNK]);
+
+    let mut chunks = data.chunks_exact_mut(CHUNK);
+    for chunk in &mut chunks {
+        let value = unsafe { ptr::read_unaligned(chunk.as_ptr() as *const u64) } ^ wide_key;
+        unsafe { ptr::write_unaligned(chunk.as_mut_ptr() as *mut u64, value) };
+    }
+
+    for byte in chunks.into_remainder() {
         *byte ^= key;
     }
 }
@@ -496,26 +519,28 @@ fn mask_bytes(data: &mut [u8], key: u8) {
 /// 使用与 openppp2 一致的顺序打乱字节。
 fn shuffle_bytes(data: &mut [u8], key: u32) {
     let len = data.len();
-    if len == 0 {
+    if len <= 1 {
         return;
     }
 
+    let len_u32 = len as u32;
     for i in 0..len {
-        let j = ((i as u32) ^ key) % (len as u32);
-        data.swap(i, j as usize);
+        let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
+        data.swap(i, j);
     }
 }
 
 /// 根据打乱顺序反向恢复字节排列。
 fn unshuffle_bytes(data: &mut [u8], key: u32) {
     let len = data.len();
-    if len == 0 {
+    if len <= 1 {
         return;
     }
 
+    let len_u32 = len as u32;
     for i in (0..len).rev() {
-        let j = ((i as u32) ^ key) % (len as u32);
-        data.swap(i, j as usize);
+        let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
+        data.swap(i, j);
     }
 }
 
@@ -573,15 +598,17 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
     const BASE94: u8 = 94;
     const BASE93: u8 = BASE94 - 1;
 
-    let mut index = 0;
+    out.clear();
+    out.reserve(data.len());
 
+    let mut index = 0;
     while index < data.len() {
-        let mut value = data[index];
-        if value < 0x20 {
+        let raw = data[index];
+        if !(PRINTABLE_START..=PRINTABLE_END).contains(&raw) {
             return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
         }
 
-        value -= 0x20;
+        let value = raw - 0x20;
         if value > BASE94 {
             return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 符号溢出"));
         }
@@ -592,12 +619,13 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
                 return Err(io::Error::new(ErrorKind::UnexpectedEof, "CTCP 高位缺失"));
             }
 
-            let next = data[index];
-            if next < 0x20 {
+            let next_raw = data[index];
+            if !(PRINTABLE_START..=PRINTABLE_END).contains(&next_raw) {
                 return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
             }
-            let next = next - 0x20;
-            if next > BASE93 {
+
+            let next = next_raw - 0x20;
+            if next >= BASE93 {
                 return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 低位溢出"));
             }
 
@@ -605,21 +633,7 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
             if combined > 0xff {
                 return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 组合字节超界"));
             }
-        }
 
-        index += 1;
-    }
-
-    out.clear();
-    out.reserve(data.len());
-
-    index = 0;
-    while index < data.len() {
-        let value = data[index] - 0x20;
-        if value >= BASE93 {
-            index += 1;
-            let next = data[index] - 0x20;
-            let combined = ((value - BASE93 + 1) as u16) * (BASE93 as u16) + (next as u16);
             out.put_u8((combined as u8).wrapping_add(key));
         } else {
             out.put_u8(value.wrapping_add(key));
