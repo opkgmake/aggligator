@@ -31,7 +31,7 @@ use aggligator::{
     transport::{AcceptorBuilder, ConnectingTransport, ConnectorBuilder, LinkTagBox},
 };
 use aggligator_monitor::monitor::{interactive_monitor, watch_tags};
-use aggligator_transport_tcp::{IpVersion, TcpAcceptor, TcpConnector, TcpLinkFilter};
+use aggligator_transport_tcp::{IpVersion, TcpAcceptor, TcpConnector, TcpLinkFilter, TcpSocketOptions};
 use aggligator_util::{
     ctcp::{self, CtcpWrapper},
     init_log, load_cfg, parse_tcp_link_filter, print_default_cfg, wait_sigterm,
@@ -46,6 +46,26 @@ use aggligator_transport_usb::{upc, usb_gadget};
 const TCP_PORT: u16 = 5800;
 const FLUSH_DELAY: Option<Duration> = Some(Duration::from_millis(10));
 const DUMP_BUFFER: usize = 8192;
+
+fn tcp_socket_options_from_cli(
+    turbo: bool, send_buffer: Option<usize>, recv_buffer: Option<usize>, tos_v4: Option<u8>,
+) -> TcpSocketOptions {
+    let mut options = if turbo { TcpSocketOptions::turbo() } else { TcpSocketOptions::default() };
+
+    if let Some(size) = send_buffer {
+        options.set_send_buffer_size((size > 0).then_some(size));
+    }
+
+    if let Some(size) = recv_buffer {
+        options.set_recv_buffer_size((size > 0).then_some(size));
+    }
+
+    if let Some(tos) = tos_v4 {
+        options.set_tos_v4(Some(tos));
+    }
+
+    options
+}
 
 #[cfg(any(feature = "usb-host", feature = "usb-device"))]
 mod usb {
@@ -166,6 +186,18 @@ pub struct ClientCli {
     /// interface-ip：为每个本地网卡与远端 IP 的组合创建一条链路。
     #[arg(long, value_parser = parse_tcp_link_filter, default_value = "interface-interface")]
     tcp_link_filter: TcpLinkFilter,
+    /// 启用 openppp2 Turbo 风格的 TCP 优化（禁用 Nagle 并放大缓冲区）。
+    #[arg(long)]
+    tcp_turbo: bool,
+    /// 自定义 TCP 发送缓冲区大小（字节，0 表示使用系统默认值）。
+    #[arg(long, value_name = "BYTES")]
+    tcp_send_buffer: Option<usize>,
+    /// 自定义 TCP 接收缓冲区大小（字节，0 表示使用系统默认值）。
+    #[arg(long, value_name = "BYTES")]
+    tcp_recv_buffer: Option<usize>,
+    /// 设置 IPv4 数据包的 TOS/DSCP 值（默认 Turbo 模式下为 0x10）。
+    #[arg(long, value_name = "TOS")]
+    tcp_tos: Option<u8>,
     /// 蓝牙 RFCOMM 服务器地址。
     #[cfg(feature = "bluer")]
     #[arg(long)]
@@ -193,11 +225,14 @@ impl ClientCli {
         let mut watch_conn: Vec<Box<dyn ConnectingTransport>> = Vec::new();
         let mut targets = Vec::new();
         let ctcp_key = self.ctcp_key;
+        let tcp_socket_options =
+            tcp_socket_options_from_cli(self.tcp_turbo, self.tcp_send_buffer, self.tcp_recv_buffer, self.tcp_tos);
         let tcp_connector = if !self.tcp.is_empty() {
             match TcpConnector::new(self.tcp.clone(), TCP_PORT).await {
                 Ok(mut tcp) => {
                     tcp.set_ip_version(IpVersion::from_only(self.ipv4, self.ipv6)?);
                     tcp.set_link_filter(self.tcp_link_filter);
+                    tcp.set_socket_options(tcp_socket_options.clone());
                     targets.push(tcp.to_string());
                     watch_conn.push(Box::new(tcp.clone()));
                     Some(tcp)
@@ -439,6 +474,18 @@ pub struct ServerCli {
     /// 要监听的 TCP 端口。
     #[arg(long)]
     tcp: Option<u16>,
+    /// 启用 openppp2 Turbo 风格的 TCP 优化（禁用 Nagle 并放大缓冲区）。
+    #[arg(long)]
+    tcp_turbo: bool,
+    /// 自定义 TCP 发送缓冲区大小（字节，0 表示使用系统默认值）。
+    #[arg(long, value_name = "BYTES")]
+    tcp_send_buffer: Option<usize>,
+    /// 自定义 TCP 接收缓冲区大小（字节，0 表示使用系统默认值）。
+    #[arg(long, value_name = "BYTES")]
+    tcp_recv_buffer: Option<usize>,
+    /// 设置 IPv4 数据包的 TOS/DSCP 值（默认 Turbo 模式下为 0x10）。
+    #[arg(long, value_name = "TOS")]
+    tcp_tos: Option<u8>,
     /// 自定义 CTCP printable 加密密钥（支持十进制、0x 十六进制、0b 二进制或 0o 八进制，默认沿用 openppp2 的内置值）。
     #[arg(long, value_name = "KEY", value_parser = parse_ctcp_key, default_value_t = ctcp::DEFAULT_KEY)]
     ctcp_key: u32,
@@ -487,10 +534,13 @@ impl ServerCli {
 
         let acceptor = builder.build();
         let mut server_ports = Vec::new();
+        let tcp_socket_options =
+            tcp_socket_options_from_cli(self.tcp_turbo, self.tcp_send_buffer, self.tcp_recv_buffer, self.tcp_tos);
 
         if let Some(port) = self.tcp {
             match TcpAcceptor::new([SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port)]).await {
-                Ok(tcp) => {
+                Ok(mut tcp) => {
+                    tcp.set_socket_options(tcp_socket_options.clone());
                     server_ports.push(format!("TCP 端口 {tcp}"));
                     acceptor.add(tcp);
                 }

@@ -29,7 +29,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    net::{TcpListener, TcpSocket},
+    net::{TcpListener, TcpSocket, TcpStream},
     sync::{mpsc, watch},
     time::sleep,
 };
@@ -45,6 +45,108 @@ pub mod simple;
 pub mod util;
 
 static NAME: &str = "tcp";
+
+/// Additional socket tuning applied to each TCP link.
+#[derive(Debug, Clone)]
+pub struct TcpSocketOptions {
+    nodelay: Option<bool>,
+    send_buffer_size: Option<usize>,
+    recv_buffer_size: Option<usize>,
+    tos_v4: Option<u8>,
+}
+
+impl Default for TcpSocketOptions {
+    fn default() -> Self {
+        Self { nodelay: Some(true), send_buffer_size: None, recv_buffer_size: None, tos_v4: None }
+    }
+}
+
+impl TcpSocketOptions {
+    /// Returns a preset that mimics openppp2's "Turbo" behaviour.
+    ///
+    /// The preset disables Nagle's algorithm, bumps the socket buffers to 512 KiB
+    /// and marks IPv4 packets with the low-delay DSCP value.
+    pub fn turbo() -> Self {
+        Self {
+            nodelay: Some(true),
+            send_buffer_size: Some(512 * 1024),
+            recv_buffer_size: Some(512 * 1024),
+            tos_v4: Some(0x10),
+        }
+    }
+
+    /// Returns whether Nagle is forced on or off (`None` leaves the OS default).
+    pub fn nodelay(&self) -> Option<bool> {
+        self.nodelay
+    }
+
+    /// Sets whether Nagle's algorithm should be toggled (`None` leaves the current state).
+    pub fn set_nodelay(&mut self, nodelay: Option<bool>) {
+        self.nodelay = nodelay;
+    }
+
+    /// Returns the configured send buffer size.
+    pub fn send_buffer_size(&self) -> Option<usize> {
+        self.send_buffer_size
+    }
+
+    /// Overrides the send buffer size (`None` keeps the OS default).
+    pub fn set_send_buffer_size(&mut self, size: Option<usize>) {
+        self.send_buffer_size = size;
+    }
+
+    /// Returns the configured receive buffer size.
+    pub fn recv_buffer_size(&self) -> Option<usize> {
+        self.recv_buffer_size
+    }
+
+    /// Overrides the receive buffer size (`None` keeps the OS default).
+    pub fn set_recv_buffer_size(&mut self, size: Option<usize>) {
+        self.recv_buffer_size = size;
+    }
+
+    /// Returns the IPv4 TOS/DSCP byte that will be applied to outgoing packets.
+    pub fn tos_v4(&self) -> Option<u8> {
+        self.tos_v4
+    }
+
+    /// Sets the IPv4 TOS/DSCP byte (`None` disables the override).
+    pub fn set_tos_v4(&mut self, tos: Option<u8>) {
+        self.tos_v4 = tos;
+    }
+
+    /// Apply all configured options to a connected TCP stream.
+    pub fn apply_to_stream(&self, stream: &TcpStream, remote: &SocketAddr) -> Result<()> {
+        if let Some(nodelay) = self.nodelay {
+            stream.set_nodelay(nodelay)?;
+        }
+
+        let sock = SockRef::from(stream);
+
+        if let Some(size) = self.send_buffer_size {
+            sock.set_send_buffer_size(size)?;
+        }
+
+        if let Some(size) = self.recv_buffer_size {
+            sock.set_recv_buffer_size(size)?;
+        }
+
+        #[cfg(not(any(
+            target_os = "fuchsia",
+            target_os = "haiku",
+            target_os = "illumos",
+            target_os = "redox",
+            target_os = "solaris",
+        )))]
+        if let Some(tos) = self.tos_v4 {
+            if remote.is_ipv4() {
+                sock.set_tos_v4(u32::from(tos))?;
+            }
+        }
+
+        Ok(())
+    }
+}
 
 /// IP protocol version.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -175,6 +277,7 @@ pub struct TcpConnector {
     link_filter: TcpLinkFilter,
     multi_interface: bool,
     interface_filter: Arc<dyn Fn(&NetworkInterface) -> bool + Send + Sync>,
+    socket_options: TcpSocketOptions,
 }
 
 impl fmt::Debug for TcpConnector {
@@ -185,6 +288,7 @@ impl fmt::Debug for TcpConnector {
             .field("resolve_interval", &self.resolve_interval)
             .field("link_filter", &self.link_filter)
             .field("multi_interface", &self.multi_interface)
+            .field("socket_options", &self.socket_options)
             .finish()
     }
 }
@@ -248,6 +352,7 @@ impl TcpConnector {
             link_filter: TcpLinkFilter::default(),
             multi_interface: !cfg!(target_os = "android"),
             interface_filter: Arc::new(|_| true),
+            socket_options: TcpSocketOptions::default(),
         })
     }
 
@@ -264,6 +369,16 @@ impl TcpConnector {
     /// Sets the link filter method.
     pub fn set_link_filter(&mut self, link_filter: TcpLinkFilter) {
         self.link_filter = link_filter;
+    }
+
+    /// Returns the currently configured socket options.
+    pub fn socket_options(&self) -> &TcpSocketOptions {
+        &self.socket_options
+    }
+
+    /// Overrides the socket options applied to newly established links.
+    pub fn set_socket_options(&mut self, options: TcpSocketOptions) {
+        self.socket_options = options;
     }
 
     /// Sets whether all available local interfaces should be used for connecting.
@@ -359,7 +474,9 @@ impl ConnectingTransport for TcpConnector {
         }
 
         let stream = socket.connect(tag.remote).await?;
-        let _ = stream.set_nodelay(true);
+        if let Err(err) = self.socket_options.apply_to_stream(&stream, &tag.remote) {
+            tracing::debug!(remote = %tag.remote, ?err, "failed to apply TCP socket options");
+        }
 
         let (rh, wh) = stream.into_split();
         Ok(IoBox::new(rh, wh).into())
@@ -411,6 +528,7 @@ impl ConnectingTransport for TcpConnector {
 #[derive(Debug)]
 pub struct TcpAcceptor {
     listeners: Vec<TcpListener>,
+    socket_options: TcpSocketOptions,
 }
 
 impl fmt::Display for TcpAcceptor {
@@ -459,7 +577,7 @@ impl TcpAcceptor {
             return Err(Error::new(ErrorKind::InvalidInput, "at least one listener is required"));
         }
 
-        Ok(Self { listeners: listeners.into_iter().collect() })
+        Ok(Self { listeners: listeners.into_iter().collect(), socket_options: TcpSocketOptions::default() })
     }
 
     /// Create a new TCP transport for incoming connections, listening individually on all interfaces.
@@ -550,10 +668,45 @@ impl AcceptingTransport for TcpAcceptor {
             let tag = TcpLinkTag::new(Some(&interface), remote, Direction::Incoming);
 
             // Configure socket.
-            let _ = socket.set_nodelay(true);
+            if let Err(err) = self.socket_options.apply_to_stream(&socket, &remote) {
+                tracing::debug!(remote = %remote, ?err, "failed to apply TCP socket options");
+            }
             let (rh, wh) = socket.into_split();
 
             let _ = tx.send(AcceptedStreamBox::new(IoBox::new(rh, wh).into(), tag)).await;
         }
+    }
+}
+
+impl TcpAcceptor {
+    /// Returns the socket options that will be applied to accepted links.
+    pub fn socket_options(&self) -> &TcpSocketOptions {
+        &self.socket_options
+    }
+
+    /// Overrides the socket options that will be applied to accepted links.
+    pub fn set_socket_options(&mut self, options: TcpSocketOptions) {
+        self.socket_options = options;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn tcp_socket_options_apply_to_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server_stream, remote) = listener.accept().await.unwrap();
+        let options = TcpSocketOptions::turbo();
+        options.apply_to_stream(&server_stream, &remote).unwrap();
+
+        let client_stream = client.await.unwrap();
+        options.apply_to_stream(&client_stream, &addr).unwrap();
     }
 }

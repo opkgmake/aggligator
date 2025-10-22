@@ -216,13 +216,7 @@ struct CtcpRx {
 
 impl CtcpRx {
     fn new(inner: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + Sync + 'static>>, key: u32) -> Self {
-        Self {
-            inner,
-            key,
-            working: BytesMut::new(),
-            header_buf: [0; HEADER_XSS + HEADER_MSS],
-            short_only: false,
-        }
+        Self { inner, key, working: BytesMut::new(), header_buf: [0; HEADER_XSS + HEADER_MSS], short_only: false }
     }
 
     fn decode(&mut self, frame: &[u8]) -> Result<Bytes> {
@@ -703,7 +697,8 @@ mod tests {
         let long_bytes = encode_buffer[..prefix_long].to_vec();
         let prefix_short = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
         let short_bytes = encode_buffer[..prefix_short].to_vec();
-        let prefix_short2 = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
+        let prefix_short2 =
+            encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_only).unwrap();
         let short_bytes2 = encode_buffer[..prefix_short2].to_vec();
 
         let mut decode_buffer = [0u8; HEADER_XSS + HEADER_MSS];
