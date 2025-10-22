@@ -296,8 +296,8 @@ impl Stream for CtcpRx {
 }
 
 fn random_range(rng: &mut SmallRng, min: u8, max: u8) -> u8 {
-    debug_assert!(min <= max);
-    rng.gen_range(min..=max)
+    debug_assert!(min < max);
+    rng.gen_range(min..max)
 }
 
 fn encode_length_prefix(
@@ -313,11 +313,11 @@ fn encode_length_prefix(
     }
 
     let prefix = &mut buffer[..HEADER_XSS + HEADER_MSS];
-    prefix[..HEADER_XSS].fill(PRINTABLE_START);
+    prefix.fill(PRINTABLE_START);
 
     let mut digits = [0u8; HEADER_MSS];
     let kf_mod = (key % HEADER_MSS_MOD) as u32;
-    let n = ((payload_len as u32) + kf_mod) % HEADER_MSS_MOD;
+    let mut n = ((payload_len as u32) + kf_mod) % HEADER_MSS_MOD;
     let dl = base94_decimal_encode(n, &mut digits);
     if dl == 0 || dl >= HEADER_XSS {
         return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度前缀非法"));
@@ -349,8 +349,8 @@ fn encode_length_prefix(
     }
 
     let checksum = u32::from(inet_checksum(&prefix[..HEADER_XSS]));
-    let check_val = ((checksum ^ (payload_len as u32)) + kf_mod) % HEADER_MSS_MOD;
-    let extra_len = base94_decimal_encode(check_val, &mut digits);
+    n = ((checksum ^ (payload_len as u32)) + kf_mod) % HEADER_MSS_MOD;
+    let extra_len = base94_decimal_encode(n, &mut digits);
     if extra_len != HEADER_MSS {
         return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 校验长度非法"));
     }
@@ -373,7 +373,7 @@ fn decode_length_prefix(
         buffer[..HEADER_XSS].copy_from_slice(&data[..HEADER_XSS]);
         base94_decode_kf(&mut buffer[..HEADER_XSS]);
         let kf_mod = (key % HEADER_MSS_MOD) as u32;
-        let raw = base94_decimal_decode(&buffer[1..HEADER_XSS])?;
+        let raw = base94_decimal_decode(&buffer[1..1 + HEADER_MSS])?;
         let length = (raw + HEADER_MSS_MOD - kf_mod) % HEADER_MSS_MOD;
         if length == 0 {
             return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度为零"));
@@ -390,7 +390,7 @@ fn decode_length_prefix(
     base94_decode_kf(&mut buffer[..HEADER_XSS]);
 
     let kf_mod = (key % HEADER_MSS_MOD) as u32;
-    let raw_length = base94_decimal_decode(&buffer[1..HEADER_XSS])?;
+    let raw_length = base94_decimal_decode(&buffer[1..1 + HEADER_MSS])?;
     let length = (raw_length + HEADER_MSS_MOD - kf_mod) % HEADER_MSS_MOD;
     if length == 0 {
         return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度为零"));
