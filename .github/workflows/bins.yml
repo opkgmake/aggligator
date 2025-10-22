@@ -1,18 +1,18 @@
-name: Build binaries
+name: Build binaries (manual)
 
 on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch, tag, or SHA)"
+        required: false
+        default: "master"
 
 jobs:
   bins:
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false            
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
@@ -21,18 +21,24 @@ jobs:
             target: aarch64-unknown-linux-musl
           - os: macos-latest
           - os: windows-latest
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Install MUSL toolchain
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'master' }}
+
+      - name: Install MUSL toolchain (Linux targets)
+        if: runner.os == 'Linux' && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl')
         run: |
           sudo apt-get update
-          sudo apt-get install musl-tools        
-      - name: Install cross toolchain
+          sudo apt-get install -y musl-tools
+
+      - name: Install cross target (if any)
         if: matrix.target
         run: rustup target add ${{ matrix.target }}
-      - name: Build binaries (Unix)
+
+      - name: Build (Unix)
         if: runner.os != 'Windows'
         run: |
           if [ -n "${{ matrix.target }}" ]; then
@@ -41,14 +47,16 @@ jobs:
             cargo build --release --bin agg-speed --bin agg-tunnel
           fi
         shell: bash
-      - name: Build binaries (Windows)
+
+      - name: Build (Windows)
         if: runner.os == 'Windows'
         run: cargo build --release --bin agg-speed --bin agg-tunnel
         shell: pwsh
-      - name: Archive binaries (Unix)
+
+      - name: Collect artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir bin
+          mkdir -p bin
           if [ -n "${{ matrix.target }}" ]; then
             cp target/${{ matrix.target }}/release/agg-speed bin/
             cp target/${{ matrix.target }}/release/agg-tunnel bin/
@@ -57,80 +65,17 @@ jobs:
             cp target/release/agg-tunnel bin/
           fi
         shell: bash
-      - name: Archive binaries (Windows)
+
+      - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
         run: |
-          New-Item -ItemType Directory -Path bin | Out-Null
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
           Copy-Item .\target\release\agg-speed.exe .\bin\
           Copy-Item .\target\release\agg-tunnel.exe .\bin\
         shell: pwsh
-      - name: Upload binaries
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: aggligator-${{ matrix.target || matrix.os }}
           path: bin
-
-  attach-release:
-    if: github.event_name == 'release'
-    needs: bins
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download binaries (Ubuntu x86_64)
-        uses: actions/download-artifact@v4
-        with:
-          name: aggligator-x86_64-unknown-linux-musl
-          path: bin/ubuntu-x86_64
-      - name: Compress binaries (Ubuntu x86_64)
-        run: tar -czf aggligator-x86_64-unknown-linux-musl.tar.gz bin/ubuntu-x86_64/*
-      - name: Attach (Ubuntu x86_64) to release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aggligator-x86_64-unknown-linux-musl.tar.gz
-          asset_name: aggligator-x86_64-linux.tar.gz
-          tag: ${{ github.ref_name }}
-
-      - name: Download binaries (Ubuntu aarch64)
-        uses: actions/download-artifact@v4
-        with:
-          name: aggligator-aarch64-unknown-linux-musl
-          path: bin/ubuntu-aarch64
-      - name: Compress binaries (Ubuntu aarch64)
-        run: tar -czf aggligator-aarch64-unknown-linux-musl.tar.gz bin/ubuntu-aarch64/*
-      - name: Attach (Ubuntu aarch64) to release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aggligator-aarch64-unknown-linux-musl.tar.gz
-          asset_name: aggligator-aarch64-linux.tar.gz
-          tag: ${{ github.ref_name }}
-
-      - name: Download binaries (macOS)
-        uses: actions/download-artifact@v4
-        with:
-          name: aggligator-macos-latest
-          path: bin/macos
-      - name: Compress binaries (macOS)
-        run: tar -czf aggligator-macos-latest.tar.gz bin/macos/*
-      - name: Attach (macOS) to release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aggligator-macos-latest.tar.gz
-          asset_name: aggligator-macos.tar.gz
-          tag: ${{ github.ref_name }}
-
-      - name: Download binaries (Windows)
-        uses: actions/download-artifact@v4
-        with:
-          name: aggligator-windows-latest
-          path: bin/windows
-      - name: Zip binaries (Windows)
-        run: zip -j aggligator-windows-latest.zip bin/windows/*
-      - name: Attach (Windows) to release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aggligator-windows-latest.zip
-          asset_name: aggligator-windows.zip
-          tag: ${{ github.ref_name }}
