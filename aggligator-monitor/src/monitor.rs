@@ -1,4 +1,4 @@
-//! Interactive connection and link monitor.
+//! 交互式连接与链路监视器。
 
 use crossterm::{
     cursor,
@@ -26,9 +26,9 @@ use aggligator::{
     transport::{ConnectingTransport, LinkError, LinkTagBox},
 };
 
-/// Watches the available tags of the specified transports.
+/// 监视指定传输所提供的链路标签。
 ///
-/// The output of this function can be passed as `tags_rx` to [`interactive_monitor`].
+/// 返回的接收端可作为 `tags_rx` 传递给 [`interactive_monitor`]。
 pub fn watch_tags(
     transports: impl IntoIterator<Item = Box<dyn ConnectingTransport>>,
 ) -> watch::Receiver<HashSet<LinkTagBox>> {
@@ -85,27 +85,27 @@ pub fn watch_tags(
     tags_rx
 }
 
-/// Runs the interactive connection and link monitor.
+/// 运行交互式连接与链路监视器。
 ///
-/// The channel `header_rx` is used to receive and update the header line to display on top of the screen.
+/// 通道 `header_rx` 用于接收并更新屏幕顶部的标题行。
 ///
-/// The channel `control_rx` is used to receive newly established connections
-/// that should be displayed. Terminated connections are removed automatically.
+/// 通道 `control_rx` 用于接收新建立的连接，
+/// 供界面展示；连接终止后会自动移除。
 ///
-/// `time_stats_idx` specifies the index of the time interval
-/// in [`Cfg::stats_intervals`](aggligator::cfg::Cfg::stats_intervals)
-/// to use for displaying the link statistics.
+/// `time_stats_idx` 指定要使用的统计时间窗口索引，
+/// 对应 [`Cfg::stats_intervals`](aggligator::cfg::Cfg::stats_intervals) 中的条目，
+/// 用于计算链路统计信息。
 ///
-/// The optional channel `tags_rx` is used to receive available link tags that should
-/// be displayed even if no link is using them.
+/// 可选的 `tags_rx` 通道用于接收可供展示的链路标签，
+/// 即便当前没有链路使用这些标签也会显示。
 ///
-/// The optional channel `tag_error_rx` is used to receive error messages from failed
-/// connection attempts that should be displayed.
+/// 可选的 `tag_error_rx` 通道用于接收链路建立失败时的错误信息，
+/// 并在界面中显示。
 ///
-/// The optional channel `disabled_tags_tx` is used to send the set of link tags
-/// disabled interactively by the user. If not present, the user cannot disable link tags.
+/// 可选的 `disabled_tags_tx` 通道用于回传用户在界面中禁用的链路标签集合。
+/// 若未提供该通道，用户无法在界面中禁用标签。
 ///
-/// This function returns when the channel `control_rx` is closed or the user presses `q`.
+/// 当 `control_rx` 被关闭或用户按下 `q` 时函数返回。
 pub fn interactive_monitor<TX, RX, TAG>(
     mut header_rx: watch::Receiver<String>, mut control_rx: broadcast::Receiver<(Control<TX, RX, TAG>, String)>,
     time_stats_idx: usize, mut tags_rx: Option<watch::Receiver<HashSet<TAG>>>,
@@ -139,7 +139,7 @@ where
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed) if controls.is_empty() => break 'main,
                 Err(TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => tracing::warn!("monitor lost incoming connection"),
+                Err(TryRecvError::Lagged(_)) => tracing::warn!("监视器丢失了传入连接"),
             }
         }
         if let Some(tag_error_rx) = tag_error_rx.as_mut() {
@@ -171,7 +171,7 @@ where
         queue!(
             stdout(),
             MoveToColumn(STATS_COL),
-            Print("  TX speed    RX speed      TXed      RXed"),
+            Print("  上行速率    下行速率      已发送    已接收"),
             MoveToNextLine(1)
         )
         .unwrap();
@@ -227,7 +227,7 @@ where
             short_id.truncate(8);
             queue!(
                 stdout(),
-                Print("Connection ".cyan()),
+                Print("连接 ".cyan()),
                 Print(short_id.bold().magenta()),
                 Print("  "),
                 Print(format_duration(stats.established.map(|e| e.elapsed()).unwrap_or_default())),
@@ -244,19 +244,19 @@ where
             .unwrap();
             queue!(
                 stdout(),
-                Print("TX:".cyan()),
-                Print("  avail ".cyan()),
+                Print("发送:".cyan()),
+                Print("  可用 ".cyan()),
                 Print(format_bytes(stats.send_space as _)),
-                Print("   unack ".cyan()),
+                Print("  未确认 ".cyan()),
                 Print(format_bytes(stats.sent_unacked as _)),
-                Print("   uncsmable ".cyan()),
+                Print("  不可用 ".cyan()),
                 Print(format_bytes(stats.sent_unconsumable as _)),
-                Print("   uncsmed ".cyan()),
+                Print("  未消费 ".cyan()),
                 Print(format_bytes(stats.sent_unconsumed as _)),
                 MoveToNextLine(1),
-                Print("RX:".cyan()),
+                Print("接收:".cyan()),
                 MoveToColumn(62),
-                Print(" uncsmed ".cyan()),
+                Print(" 未消费 ".cyan()),
                 Print(format_bytes(stats.recved_unconsumed as _)),
                 MoveToNextLine(1),
             )
@@ -290,14 +290,14 @@ where
                 .unwrap();
 
                 if disabled.contains(tag) {
-                    queue!(stdout(), Print("disabled".red())).unwrap();
+                    queue!(stdout(), Print("已禁用".red())).unwrap();
                 } else if let Some(link) = link {
                     let stats = link.stats();
                     match (link.not_working_reason(), link.not_working_since()) {
                         (Some(reason), Some(since)) => {
                             queue!(
                                 stdout(),
-                                Print("unconfirmed ".dark_yellow()),
+                                Print("未确认 ".dark_yellow()),
                                 Print(format_duration(since.elapsed())),
                                 Print(": ".grey()),
                                 Print(reason.to_string().blue())
@@ -306,7 +306,7 @@ where
                         }
                         _ => queue!(
                             stdout(),
-                            Print("connected ".green()),
+                            Print("已连接 ".green()),
                             Print(format_duration(stats.established.elapsed())),
                         )
                         .unwrap(),
@@ -317,9 +317,9 @@ where
                     }
 
                     if link.is_blocked() {
-                        queue!(stdout(), Print(" blocked".red())).unwrap();
+                        queue!(stdout(), Print(" 已阻断".red())).unwrap();
                     } else if link.is_remotely_blocked() {
-                        queue!(stdout(), Print(" remotely blocked".red())).unwrap();
+                        queue!(stdout(), Print(" 远端阻断".red())).unwrap();
                     }
 
                     let hangs = link.stats().hangs;
@@ -344,7 +344,11 @@ where
                     queue!(
                         stdout(),
                         Print("    "),
-                        Print(format!("{} {}", format!("{:4}", stats.roundtrip.as_millis()).blue(), "ms".grey())),
+                        Print(format!(
+                            "{} {}",
+                            format!("{:4}", stats.roundtrip.as_millis()).blue(),
+                            "毫秒".grey()
+                        )),
                         Print(" "),
                         Print(format_bytes(stats.sent_unacked)),
                         Print(" /".cyan()),
@@ -370,13 +374,8 @@ where
         }
 
         // Usage line.
-        execute!(
-            stdout(),
-            MoveTo(0, rows - 2),
-            Print("Press 0-9 to toggle a link, q to quit.".cyan()),
-            MoveToNextLine(1)
-        )
-        .unwrap();
+        execute!(stdout(), MoveTo(0, rows - 2), Print("按 0-9 切换链路，按 q 退出。".cyan()), MoveToNextLine(1))
+            .unwrap();
 
         // Handle user events.
         toggle_link_block = None;
@@ -409,7 +408,7 @@ const MB: u64 = KB * KB;
 const GB: u64 = MB * KB;
 const TB: u64 = GB * KB;
 
-/// Formats a byte count.
+/// 格式化字节数。
 pub fn format_bytes(bytes: u64) -> String {
     let (factor, unit, n) = if bytes >= TB {
         (TB, "TB", 1)
@@ -426,7 +425,7 @@ pub fn format_bytes(bytes: u64) -> String {
     format!("{} {}", format!("{:6.n$}", bytes as f32 / factor as f32, n = n).blue(), unit.grey())
 }
 
-/// Formats a speed.
+/// 格式化速率。
 pub fn format_speed(speed: f64) -> String {
     let (factor, unit, n) = if speed >= TB as f64 {
         (TB, "TB/s", 1)
@@ -443,7 +442,7 @@ pub fn format_speed(speed: f64) -> String {
     format!("{} {}", format!("{:6.n$}", speed / factor as f64, n = n).blue(), unit.grey())
 }
 
-/// Formats a duration.
+/// 格式化时间间隔。
 pub fn format_duration(dur: Duration) -> String {
     let mut time = dur.as_secs();
     let hours = time / 3600;
@@ -455,18 +454,18 @@ pub fn format_duration(dur: Duration) -> String {
     let mut output = String::new();
 
     if hours > 0 {
-        write!(output, "{}{}", format!("{hours:2}").blue(), "h".grey()).unwrap();
+        write!(output, "{}{}", format!("{hours:2}").blue(), "小时".grey()).unwrap();
     } else {
         write!(output, "   ").unwrap();
     }
 
     if hours > 0 || minutes > 0 {
-        write!(output, "{}{}", format!("{minutes:2}").blue(), "m".grey()).unwrap();
+        write!(output, "{}{}", format!("{minutes:2}").blue(), "分钟".grey()).unwrap();
     } else {
         write!(output, "   ").unwrap();
     }
 
-    write!(output, "{}{}", format!("{seconds:2}").blue(), "s".grey()).unwrap();
+    write!(output, "{}{}", format!("{seconds:2}").blue(), "秒".grey()).unwrap();
 
     output
 }

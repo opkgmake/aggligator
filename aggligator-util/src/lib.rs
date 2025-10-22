@@ -6,7 +6,7 @@
     issue_tracker_base_url = "https://github.com/surban/aggligator/issues/"
 )]
 
-//! Aggligator command line utilities.
+//! Aggligator 命令行工具集。
 
 use anyhow::{bail, Context};
 use std::path::PathBuf;
@@ -15,40 +15,39 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use aggligator::cfg::Cfg;
 use aggligator_transport_tcp::TcpLinkFilter;
 
-/// Initializes logging for command line utilities.
+/// 为命令行工具初始化日志系统。
 pub fn init_log() {
     tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::from_default_env()).init();
     tracing_log::LogTracer::init().unwrap();
 }
 
-/// Prints the default Aggligator configuration.
+/// 打印 Aggligator 的默认配置。
 pub fn print_default_cfg() {
     println!("{}", serde_json::to_string_pretty(&Cfg::default()).unwrap());
 }
 
-/// Loads an Aggligator configuration from disk or returns the default
-/// configuration if the path is empty.
+/// 从磁盘加载 Aggligator 配置；当未提供路径时返回默认配置。
 pub fn load_cfg(path: &Option<PathBuf>) -> anyhow::Result<Cfg> {
     match path {
         Some(path) => {
-            let file = std::fs::File::open(path).context("cannot open configuration file")?;
-            serde_json::from_reader(file).context("cannot parse configuration file")
+            let file = std::fs::File::open(path).context("无法打开配置文件")?;
+            serde_json::from_reader(file).context("无法解析配置文件")
         }
         None => Ok(Cfg::default()),
     }
 }
 
-/// Parse [TcpLinkFilter] option.
+/// 解析 [TcpLinkFilter] 选项。
 pub fn parse_tcp_link_filter(s: &str) -> anyhow::Result<TcpLinkFilter> {
     match s {
         "none" => Ok(TcpLinkFilter::None),
         "interface-interface" => Ok(TcpLinkFilter::InterfaceInterface),
         "interface-ip" => Ok(TcpLinkFilter::InterfaceIp),
-        other => bail!("unknown TCP link filter: {other}"),
+        other => bail!("未知的 TCP 链路过滤器：{other}"),
     }
 }
 
-/// Waits for a platform-specific termination signal.
+/// 等待平台相关的终止信号。
 pub async fn wait_sigterm() {
     #[cfg(unix)]
     {
@@ -89,5 +88,5 @@ pub async fn wait_sigterm() {
         std::future::pending::<()>().await;
     }
 
-    tracing::info!("received termination signal");
+    tracing::info!("收到终止信号");
 }

@@ -1,4 +1,4 @@
-//! Speed test.
+//! 速度测试。
 
 use futures::future;
 use rand::prelude::*;
@@ -20,7 +20,7 @@ use aggligator::exec;
 const BUF_SIZE: usize = 8192;
 const MB: f64 = 1_048_576.;
 
-/// Speed reporting interval.
+/// 速度报告的时间间隔。
 pub const INTERVAL: Duration = Duration::from_secs(10);
 
 /// Performs a speed test.
@@ -88,9 +88,9 @@ pub async fn speed_test(
         None => (None, None),
     };
 
-    tracing::info!("Starting speed test");
+    tracing::info!("开始测速");
     #[cfg(debug_assertions)]
-    tracing::warn!("debug build, speed test will not be accurate");
+    tracing::warn!("调试构建，测速结果仅供参考");
 
     let sender_stop_tx = stop_tx.clone();
     let (stop_sender_tx, mut stop_sender_rx) = oneshot::channel();
@@ -125,7 +125,7 @@ pub async fn speed_test(
                 if interval_start.elapsed() >= report_interval {
                     let speed = sent_interval as f64 / interval_start.elapsed().as_secs_f64();
 
-                    tracing::info!("Send speed: {:.1} MB/s", speed / MB);
+                    tracing::info!("发送速率：{:.1} MB/s", speed / MB);
                     if let Some(tx) = &send_tx {
                         if tx.send(speed).is_err() {
                             break;
@@ -141,7 +141,7 @@ pub async fn speed_test(
                 }
             }
 
-            tracing::info!("Sender exited");
+            tracing::info!("发送端结束");
             Ok::<_, Error>((sent_total, start.elapsed()))
         }
         .in_current_span(),
@@ -187,7 +187,7 @@ pub async fn speed_test(
                 rng.fill_bytes(&mut chk_buf);
                 if chk_buf != buf {
                     let _ = stop_sender_tx.send(());
-                    return Err(Error::new(ErrorKind::InvalidData, "received data is malformed"));
+                    return Err(Error::new(ErrorKind::InvalidData, "收到的数据格式错误"));
                 }
 
                 recved_total += n;
@@ -196,7 +196,7 @@ pub async fn speed_test(
                 if interval_start.elapsed() >= report_interval {
                     let speed = recved_interval as f64 / interval_start.elapsed().as_secs_f64();
 
-                    tracing::info!("Receive speed: {:.1} MB/s", speed / MB);
+                    tracing::info!("接收速率：{:.1} MB/s", speed / MB);
                     if let Some(tx) = &recv_tx {
                         if tx.send(speed).is_err() {
                             break;
@@ -208,7 +208,7 @@ pub async fn speed_test(
                 }
             }
 
-            tracing::info!("Receiver exited");
+            tracing::info!("接收端结束");
             Ok((recved_total, start.elapsed()))
         }
         .in_current_span(),
@@ -217,10 +217,10 @@ pub async fn speed_test(
     let (Ok(sender), Ok(receiver)) = join!(sender, receiver) else { unreachable!() };
 
     if let Err(err) = &sender {
-        tracing::warn!(%err, "Sender error");
+        tracing::warn!(%err, "发送端出错");
     }
     if let Err(err) = &receiver {
-        tracing::warn!(%err, "Receiver error");
+        tracing::warn!(%err, "接收端出错");
     }
 
     let (tx_total, tx_dur) = sender?;
@@ -229,6 +229,6 @@ pub async fn speed_test(
     let (rx_total, rx_dur) = receiver?;
     let rx_speed = rx_total as f64 / rx_dur.as_secs_f64().max(1e-10);
 
-    tracing::info!("Upstream: {tx_speed:.0} bytes/s  Downstream: {rx_speed:.0} bytes/s");
+    tracing::info!("上行：{tx_speed:.0} 字节/秒  下行：{rx_speed:.0} 字节/秒");
     Ok((tx_speed, rx_speed))
 }
