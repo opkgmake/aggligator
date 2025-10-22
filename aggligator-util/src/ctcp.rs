@@ -22,6 +22,33 @@ const HEADER_XSS: usize = HEADER_MSS + 1;
 const HEADER_MSS_MOD: u32 = (94 * 94 * 94) - 1;
 const PRINTABLE_START: u8 = 0x20;
 const PRINTABLE_END: u8 = 0x7e;
+const BASE94: u8 = 94;
+const BASE93: u8 = BASE94 - 1;
+
+#[derive(Clone, Copy)]
+struct Base94Encoded {
+    bytes: [u8; 2],
+    len: u8,
+}
+
+const fn build_base94_encode_table() -> [Base94Encoded; 256] {
+    let mut table = [Base94Encoded { bytes: [0; 2], len: 0 }; 256];
+    let mut value = 0usize;
+    while value < 256 {
+        let adjusted = value as u8;
+        table[value] = if adjusted < BASE93 {
+            Base94Encoded { bytes: [PRINTABLE_START + adjusted, 0], len: 1 }
+        } else {
+            let high = ((adjusted / BASE93) - 1) + BASE93;
+            let low = adjusted % BASE93;
+            Base94Encoded { bytes: [PRINTABLE_START + high, PRINTABLE_START + low], len: 2 }
+        };
+        value += 1;
+    }
+    table
+}
+
+static BASE94_ENCODE_TABLE: [Base94Encoded; 256] = build_base94_encode_table();
 
 /// openppp2 CTCP 管道默认的密钥常量。
 ///
@@ -497,6 +524,7 @@ fn mask_key(key: u32) -> u8 {
 }
 
 /// 逐字节与固定密钥异或。
+#[inline(always)]
 fn mask_bytes(data: &mut [u8], key: u8) {
     if key == 0 {
         return;
@@ -517,6 +545,7 @@ fn mask_bytes(data: &mut [u8], key: u8) {
 }
 
 /// 使用与 openppp2 一致的顺序打乱字节。
+#[inline(always)]
 fn shuffle_bytes(data: &mut [u8], key: u32) {
     let len = data.len();
     if len <= 1 {
@@ -525,6 +554,15 @@ fn shuffle_bytes(data: &mut [u8], key: u32) {
 
     let len_u32 = len as u32;
     let ptr = data.as_mut_ptr();
+    if len.is_power_of_two() {
+        let mask = len_u32 - 1;
+        for i in 0..len {
+            let j = (((i as u32) ^ key) & mask) as usize;
+            unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
+        }
+        return;
+    }
+
     for i in 0..len {
         let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
         unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
@@ -532,6 +570,7 @@ fn shuffle_bytes(data: &mut [u8], key: u32) {
 }
 
 /// 根据打乱顺序反向恢复字节排列。
+#[inline(always)]
 fn unshuffle_bytes(data: &mut [u8], key: u32) {
     let len = data.len();
     if len <= 1 {
@@ -540,6 +579,15 @@ fn unshuffle_bytes(data: &mut [u8], key: u32) {
 
     let len_u32 = len as u32;
     let ptr = data.as_mut_ptr();
+    if len.is_power_of_two() {
+        let mask = len_u32 - 1;
+        for i in (0..len).rev() {
+            let j = (((i as u32) ^ key) & mask) as usize;
+            unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
+        }
+        return;
+    }
+
     for i in (0..len).rev() {
         let j = fast_mod_u32((i as u32) ^ key, len_u32) as usize;
         unsafe { ptr::swap(ptr.add(i), ptr.add(j)) };
@@ -547,6 +595,7 @@ fn unshuffle_bytes(data: &mut [u8], key: u32) {
 }
 
 /// 差分编码实现，与 openppp2 的 `ssea::delta_encode` 一致。
+#[inline(always)]
 fn delta_encode_in_place(data: &mut [u8], key: u8) {
     if data.is_empty() {
         return;
@@ -562,6 +611,7 @@ fn delta_encode_in_place(data: &mut [u8], key: u8) {
 }
 
 /// 差分解码实现，对应 `ssea::delta_decode`。
+#[inline(always)]
 fn delta_decode_in_place(data: &mut [u8], key: u8) {
     if data.is_empty() {
         return;
@@ -577,37 +627,22 @@ fn delta_decode_in_place(data: &mut [u8], key: u8) {
 
 /// Base94 编码，仅输出 0x20~0x7e 之间的可打印字符。
 fn base94_encode_into(data: &[u8], key: u8, out: &mut BytesMut) {
-    const BASE94: u8 = 94;
-    const BASE93: u8 = BASE94 - 1;
-
     out.clear();
+    out.reserve(data.len() * 2);
 
-    let mut extra = 0usize;
-    for &byte in data {
-        if byte.wrapping_sub(key) >= BASE93 {
-            extra += 1;
-        }
-    }
-
-    let target_len = data.len() + extra;
-    out.resize(target_len, 0);
-
-    let mut offset = 0;
+    let mut offset = 0usize;
     let ptr = out.as_mut_ptr();
+
     for &byte in data {
         let adjusted = byte.wrapping_sub(key);
+        let entry = BASE94_ENCODE_TABLE[adjusted as usize];
         unsafe {
-            if adjusted >= BASE93 {
-                let high = ((adjusted / BASE93) - 1) + BASE93;
-                let low = adjusted % BASE93;
-                ptr.add(offset).write(0x20 + high);
-                ptr.add(offset + 1).write(0x20 + low);
-                offset += 2;
-            } else {
-                ptr.add(offset).write(0x20 + adjusted);
-                offset += 1;
+            ptr.add(offset).write(entry.bytes[0]);
+            if entry.len == 2 {
+                ptr.add(offset + 1).write(entry.bytes[1]);
             }
         }
+        offset += entry.len as usize;
     }
 
     unsafe {
@@ -617,14 +652,13 @@ fn base94_encode_into(data: &[u8], key: u8, out: &mut BytesMut) {
 
 /// Base94 解码，将可打印字符还原为原始字节。
 fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
-    const BASE94: u8 = 94;
-    const BASE93: u8 = BASE94 - 1;
-
     out.clear();
+    out.reserve(data.len());
 
     let mut index = 0usize;
-    let mut escapes = 0usize;
     let len = data.len();
+    let ptr = out.as_mut_ptr();
+    let mut out_offset = 0usize;
 
     while index < len {
         let raw = data[index];
@@ -632,7 +666,7 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
             return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
         }
 
-        let value = raw - 0x20;
+        let value = raw - PRINTABLE_START;
         if value >= BASE93 {
             index += 1;
             if index >= len {
@@ -644,7 +678,7 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
                 return Err(io::Error::new(ErrorKind::InvalidData, "非可打印 CTCP 字符"));
             }
 
-            let next = next_raw - 0x20;
+            let next = next_raw - PRINTABLE_START;
             if next >= BASE93 {
                 return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 低位溢出"));
             }
@@ -654,30 +688,11 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
                 return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 组合字节超界"));
             }
 
-            escapes += 1;
-        }
-
-        index += 1;
-    }
-
-    out.resize(len - escapes, 0);
-
-    index = 0;
-    let mut out_offset = 0usize;
-    let ptr = out.as_mut_ptr();
-
-    while index < len {
-        let raw = unsafe { *data.get_unchecked(index) };
-        let value = raw - 0x20;
-
-        unsafe {
-            if value >= BASE93 {
-                index += 1;
-                let next_raw = *data.get_unchecked(index);
-                let next = next_raw - 0x20;
-                let combined = ((value - BASE93 + 1) as u16) * (BASE93 as u16) + (next as u16);
+            unsafe {
                 ptr.add(out_offset).write((combined as u8).wrapping_add(key));
-            } else {
+            }
+        } else {
+            unsafe {
                 ptr.add(out_offset).write(value.wrapping_add(key));
             }
         }
