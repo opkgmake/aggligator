@@ -474,7 +474,7 @@ fn ip_standard_checksum(data: &[u8]) -> u16 {
         acc = (acc >> 16) + (acc & 0xffff);
     }
 
-    u16::from_be(acc as u16)
+    acc as u16
 }
 
 fn inet_checksum(data: &[u8]) -> u16 {
@@ -730,6 +730,11 @@ mod tests {
         let mut rx = CtcpRx::new(stream, DEFAULT_KEY);
         let err = rx.decode(&invalid).unwrap_err();
         assert!(matches!(err.kind(), ErrorKind::InvalidData | ErrorKind::UnexpectedEof));
+    }
+
+    #[test]
+    fn inet_checksum_matches_reference() {
+        assert_eq!(inet_checksum(&[0x3e, 0x2f, 0x28, 0x51]), 0x997f);
     }
 }
 
