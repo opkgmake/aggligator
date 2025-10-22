@@ -351,6 +351,7 @@ fn encode_length_prefix(
     prefix[..HEADER_XSS].swap(2, 3);
 
     if *short_next {
+        *short_next = false;
         return Ok(HEADER_XSS);
     }
 
@@ -384,6 +385,7 @@ fn decode_length_prefix(
         if length == 0 {
             return Err(io::Error::new(ErrorKind::InvalidData, "CTCP 长度为零"));
         }
+        *short_expected = false;
         return Ok((length as usize, HEADER_XSS));
     }
 
@@ -641,6 +643,7 @@ fn base94_decode_into(data: &[u8], key: u8, out: &mut BytesMut) -> Result<()> {
 mod tests {
     use super::*;
     use futures::SinkExt;
+    use rand::{rngs::SmallRng, SeedableRng};
 
     #[test]
     fn roundtrip_basic() {
@@ -669,6 +672,62 @@ mod tests {
         let mut rx = CtcpRx::new(stream, DEFAULT_KEY);
         let decoded = rx.decode(&encoded).unwrap();
         assert_eq!(decoded.as_ref(), data);
+    }
+
+    #[test]
+    fn length_prefix_alternates_on_encode() {
+        let key = DEFAULT_KEY;
+        let mut buffer = [0u8; HEADER_XSS + HEADER_MSS];
+        let mut rng = SmallRng::seed_from_u64(1);
+        let mut short_next = false;
+
+        let long = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
+        assert_eq!(long, HEADER_XSS + HEADER_MSS);
+        assert!(short_next);
+
+        let short = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
+        assert_eq!(short, HEADER_XSS);
+        assert!(!short_next);
+
+        let long_again = encode_length_prefix(128, key, &mut buffer, &mut rng, &mut short_next).unwrap();
+        assert_eq!(long_again, HEADER_XSS + HEADER_MSS);
+        assert!(short_next);
+    }
+
+    #[test]
+    fn length_prefix_alternates_on_decode() {
+        let key = DEFAULT_KEY;
+        let mut encode_buffer = [0u8; HEADER_XSS + HEADER_MSS];
+        let mut rng = SmallRng::seed_from_u64(2);
+        let mut short_next = false;
+
+        let prefix_long = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
+        let long_bytes = encode_buffer[..prefix_long].to_vec();
+        let prefix_short = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
+        let short_bytes = encode_buffer[..prefix_short].to_vec();
+        let prefix_long2 = encode_length_prefix(256, key, &mut encode_buffer, &mut rng, &mut short_next).unwrap();
+        let long_bytes2 = encode_buffer[..prefix_long2].to_vec();
+
+        let mut decode_buffer = [0u8; HEADER_XSS + HEADER_MSS];
+        let mut short_expected = false;
+
+        let (len1, used1) =
+            decode_length_prefix(&long_bytes, key, &mut decode_buffer, &mut short_expected).unwrap();
+        assert_eq!(len1, 256);
+        assert_eq!(used1, HEADER_XSS + HEADER_MSS);
+        assert!(short_expected);
+
+        let (len2, used2) =
+            decode_length_prefix(&short_bytes, key, &mut decode_buffer, &mut short_expected).unwrap();
+        assert_eq!(len2, 256);
+        assert_eq!(used2, HEADER_XSS);
+        assert!(!short_expected);
+
+        let (len3, used3) =
+            decode_length_prefix(&long_bytes2, key, &mut decode_buffer, &mut short_expected).unwrap();
+        assert_eq!(len3, 256);
+        assert_eq!(used3, HEADER_XSS + HEADER_MSS);
+        assert!(short_expected);
     }
 
     #[test]
