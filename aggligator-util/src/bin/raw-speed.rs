@@ -1,4 +1,4 @@
-//! Raw connections for comparison of performance.
+//! 通过原生连接对比性能。
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -39,23 +39,23 @@ use aggligator_util::init_log;
 const PORT: u16 = 5701;
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Run speed test using a separate TCP connection for each interface.
+/// 为每块网卡单独建立 TCP 连接进行测速。
 ///
-/// Useful for comparing performance to an aggregated connection using
-/// the `agg-speed` tool.
+/// 可用于与使用聚合连接的 `agg-speed` 工具进行性能对比，
+/// 观察聚合带来的收益。
 #[derive(Parser)]
 #[command(author, version)]
 pub struct RawSpeedCli {
-    /// Client or server.
+    /// 选择客户端或服务器模式。
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Raw speed test client.
+    /// 原生测速客户端。
     Client(RawClientCli),
-    /// Raw speed test server.
+    /// 原生测速服务器。
     Server(RawServerCli),
 }
 
@@ -70,35 +70,35 @@ async fn main() -> Result<()> {
 
 #[derive(Args)]
 pub struct RawClientCli {
-    /// Use IPv4.
+    /// 使用 IPv4。
     #[arg(long, short = '4')]
     ipv4: bool,
-    /// Use IPv6.
+    /// 使用 IPv6。
     #[arg(long, short = '6')]
     ipv6: bool,
-    /// Limit test data to specified number of MB.
+    /// 限制测试传输的数据量（单位：MB）。
     #[arg(long, short = 'l')]
     limit: Option<usize>,
-    /// Limit test duration to specified number of seconds.
+    /// 限制测试持续时间（单位：秒）。
     #[arg(long, short = 't')]
     time: Option<u64>,
-    /// Only measure send speed.
+    /// 仅测试发送速度。
     #[arg(long, short = 's')]
     send_only: bool,
-    /// Only measure receive speed.
+    /// 仅测试接收速度。
     #[arg(long, short = 'r')]
     recv_only: bool,
-    /// Do not display the monitor.
+    /// 不显示监视界面。
     #[arg(long, short = 'n')]
     no_monitor: bool,
-    /// Server name or IP addresses and port number.
+    /// 服务器的名称或 IP 地址与端口号。
     target: Vec<String>,
 }
 
 impl RawClientCli {
     async fn resolve_target(&self) -> Result<HashSet<SocketAddr>> {
         if self.ipv4 && self.ipv6 {
-            return Err(anyhow!("IPv4 and IPv6 options are mutually exclusive"));
+            return Err(anyhow!("IPv4 和 IPv6 选项不能同时使用"));
         }
 
         let mut target = self.target.clone();
@@ -121,7 +121,7 @@ impl RawClientCli {
         }
 
         if addrs.is_empty() {
-            Err(anyhow!("cannot resolve IP address of target"))
+            Err(anyhow!("无法解析目标的 IP 地址"))
         } else {
             Ok(addrs)
         }
@@ -155,7 +155,7 @@ impl RawClientCli {
                             continue;
                         }
 
-                        tracing::debug!("binding to {addr:?} on interface {}", &ifn.name);
+                        tracing::debug!("在接口 {} 上绑定地址 {addr:?}", &ifn.name);
                         socket.bind(SocketAddr::new(addr.ip(), 0))?;
                         bound = true;
                         break 'ifaces;
@@ -164,7 +164,7 @@ impl RawClientCli {
             }
 
             if !bound {
-                anyhow::bail!("no IP address for interface");
+                anyhow::bail!("该网卡没有可用的 IP 地址");
             }
         }
 
@@ -184,7 +184,7 @@ impl RawClientCli {
                 connected.remove(&conn);
             }
 
-            let interfaces = NetworkInterface::show().context("cannot get network interfaces")?;
+            let interfaces = NetworkInterface::show().context("无法获取网络接口信息")?;
             let iface_names: HashSet<_> = interfaces.clone().into_iter().map(|iface| iface.name).collect();
 
             for iface in iface_names {
@@ -201,7 +201,7 @@ impl RawClientCli {
                     let target = *target;
                     exec::spawn(async move {
                         if iface_speeds_tx.is_none() {
-                            eprintln!("Trying TCP connection from {iface}");
+                            eprintln!("尝试从 {iface} 建立 TCP 连接");
                         }
 
                         match timeout(
@@ -212,7 +212,7 @@ impl RawClientCli {
                         {
                             Ok(Ok(strm)) => {
                                 if iface_speeds_tx.is_none() {
-                                    eprintln!("TCP connection established from {iface}");
+                                    eprintln!("已从 {iface} 建立 TCP 连接");
                                 }
 
                                 let (read, write) = strm.into_split();
@@ -247,17 +247,17 @@ impl RawClientCli {
                                 .await;
 
                                 if iface_speeds_tx.is_none() {
-                                    eprintln!("TCP connection from {task_iface} done");
+                                    eprintln!("来自 {task_iface} 的 TCP 连接已完成");
                                 }
                             }
                             Ok(Err(err)) => {
                                 if iface_speeds_tx.is_none() {
-                                    eprintln!("TCP connection from {iface} failed: {}", &err);
+                                    eprintln!("来自 {iface} 的 TCP 连接失败：{err}");
                                 }
                             }
                             Err(_) => {
                                 if iface_speeds_tx.is_none() {
-                                    eprintln!("TCP connection from {iface} timed out");
+                                    eprintln!("来自 {iface} 的 TCP 连接超时");
                                 }
                             }
                         }
@@ -298,8 +298,12 @@ impl RawClientCli {
             let (_cols, rows) = terminal::size().unwrap();
             execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0)).unwrap();
             execute!(stdout(), Print(header.bold()), MoveToNextLine(2)).unwrap();
-            execute!(stdout(), Print("                       TX             RX    ".grey()), MoveToNextLine(1))
-                .unwrap();
+            execute!(
+                stdout(),
+                Print("                       上行            下行    ".grey()),
+                MoveToNextLine(1)
+            )
+            .unwrap();
 
             let mut total_tx = 0.;
             let mut total_rx = 0.;
@@ -309,7 +313,7 @@ impl RawClientCli {
             }
             execute!(
                 stdout(),
-                Print("Total               ".grey()),
+                Print("合计               ".grey()),
                 Print(format_speed(total_tx)),
                 Print("    "),
                 Print(format_speed(total_rx)),
@@ -331,13 +335,8 @@ impl RawClientCli {
                 .unwrap();
             }
 
-            execute!(
-                stdout(),
-                MoveTo(0, rows - 2),
-                Print("Press q to quit.".to_string().grey()),
-                MoveToNextLine(1)
-            )
-            .unwrap();
+            execute!(stdout(), MoveTo(0, rows - 2), Print("按 q 退出。".to_string().grey()), MoveToNextLine(1))
+                .unwrap();
 
             if poll(Duration::from_secs(1))? {
                 if let Event::Key(KeyEvent { code: KeyCode::Char('q'), .. }) = read()? {
@@ -355,8 +354,8 @@ impl RawClientCli {
             self.no_monitor = true;
         }
 
-        let target = self.resolve_target().await.context("cannot resolve target")?;
-        let header = format!("Connecting to raw speed test server at {:?}", &target);
+        let target = self.resolve_target().await.context("无法解析目标地址")?;
+        let header = format!("正在连接位于 {:?} 的原生测速服务", &target);
 
         let limit = self.limit.map(|mb| mb * 1_048_576);
         let time = self.time.map(Duration::from_secs);
@@ -384,14 +383,14 @@ impl RawClientCli {
 
 #[derive(Args)]
 pub struct RawServerCli {
-    /// TCP port.
+    /// TCP 端口。
     #[arg(default_value_t = PORT)]
     port: u16,
 }
 
 impl RawServerCli {
     fn listen(interface: &NetworkInterface, port: u16) -> Result<TcpListener> {
-        let addr = SocketAddr::new(interface.addr.first().context("interface has no IP")?.ip(), port);
+        let addr = SocketAddr::new(interface.addr.first().context("该网卡没有 IP 地址")?.ip(), port);
 
         let socket = match addr.ip() {
             IpAddr::V4(_) => TcpSocket::new_v4()?,
@@ -409,11 +408,11 @@ impl RawServerCli {
     async fn tcp_serve(port: u16) -> Result<()> {
         let mut listeners = SelectAll::new();
 
-        let interfaces = NetworkInterface::show().context("cannot get network interfaces")?;
+        let interfaces = NetworkInterface::show().context("无法获取网络接口信息")?;
         for interface in interfaces {
             match Self::listen(&interface, port) {
                 Ok(listener) => {
-                    eprintln!("Raw speed test server listening on {}", listener.local_addr()?);
+                    eprintln!("原生测速服务器监听于 {}", listener.local_addr()?);
                     let stream = stream::try_unfold(listener, |listener| async move {
                         let res = listener.accept().await?;
                         Ok::<_, io::Error>(Some((res, listener)))
@@ -421,14 +420,14 @@ impl RawServerCli {
                     listeners.push(stream.boxed());
                 }
                 Err(err) => {
-                    eprintln!("Cannot listen on {interface:?}: {err}");
+                    eprintln!("无法在 {interface:?} 上监听：{err}");
                 }
             }
         }
         eprintln!();
 
         while let Some((socket, src)) = listeners.next().await.transpose()? {
-            eprintln!("Accepted TCP connection from {src}");
+            eprintln!("已接受来自 {src} 的 TCP 连接");
 
             let (read, write) = socket.into_split();
             exec::spawn(async move {
@@ -445,7 +444,7 @@ impl RawServerCli {
                     None,
                 )
                 .await;
-                eprintln!("TCP connection from {src} done");
+                eprintln!("来自 {src} 的 TCP 连接已完成");
             });
         }
 
