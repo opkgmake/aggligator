@@ -107,20 +107,27 @@ pub async fn speed_test(
             let mut sent_total = 0;
             let mut sent_interval = 0;
             let mut interval_start = Instant::now();
+            let mut buf = vec![0u8; BUF_SIZE];
 
             #[allow(clippy::assertions_on_constants)]
-            while limit.map(|limit| sent_total <= limit).unwrap_or(true)
+            while limit.map(|limit| sent_total < limit).unwrap_or(true)
                 && !sender_stop_tx.is_closed()
                 && start.elapsed() < duration.unwrap_or(Duration::MAX)
             {
                 assert!(BUF_SIZE % 8 == 0);
-                let mut buf = [0; BUF_SIZE];
-                rng.fill_bytes(&mut buf);
+                let chunk_len =
+                    limit.map(|limit| limit.saturating_sub(sent_total).min(BUF_SIZE)).unwrap_or(BUF_SIZE);
+                let chunk_len = chunk_len - (chunk_len % 8);
+                if chunk_len == 0 {
+                    break;
+                }
 
-                write.write_all(&buf).await?;
+                rng.fill_bytes(&mut buf[..chunk_len]);
 
-                sent_total += BUF_SIZE;
-                sent_interval += BUF_SIZE;
+                write.write_all(&buf[..chunk_len]).await?;
+
+                sent_total += chunk_len;
+                sent_interval += chunk_len;
 
                 if interval_start.elapsed() >= report_interval {
                     let speed = sent_interval as f64 / interval_start.elapsed().as_secs_f64();
@@ -164,17 +171,20 @@ pub async fn speed_test(
             let mut recved_total = 0;
             let mut recved_interval = 0;
             let mut interval_start = Instant::now();
+            let mut buf = vec![0u8; BUF_SIZE + 8];
+            let mut chk_buf = vec![0u8; BUF_SIZE + 8];
 
             while !stop_tx.is_closed() && start.elapsed() < duration.unwrap_or(Duration::MAX) {
-                let mut buf = [0; BUF_SIZE];
-                let mut n = read.read(&mut buf).await?;
+                let mut n = read.read(&mut buf[..BUF_SIZE]).await?;
                 if n == 0 {
                     break;
                 }
                 match n % 8 {
                     0 => (),
                     rem => {
-                        n += read.read_exact(&mut buf[n..(n + 8 - rem)]).await?;
+                        let extra = 8 - rem;
+                        read.read_exact(&mut buf[n..(n + extra)]).await?;
+                        n += extra;
                         if n % 8 != 0 {
                             break;
                         }
@@ -182,10 +192,13 @@ pub async fn speed_test(
                 }
                 let buf = &buf[..n];
 
-                let mut chk_buf = vec![0; n];
+                if chk_buf.len() < n {
+                    chk_buf.resize(n, 0);
+                }
+                let chk_slice = &mut chk_buf[..n];
                 assert!(n % 8 == 0);
-                rng.fill_bytes(&mut chk_buf);
-                if chk_buf != buf {
+                rng.fill_bytes(chk_slice);
+                if chk_slice != buf {
                     let _ = stop_sender_tx.send(());
                     return Err(Error::new(ErrorKind::InvalidData, "收到的数据格式错误"));
                 }
